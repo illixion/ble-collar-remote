@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collar controller</title>
+
+    <script src="socket.io.min.js"></script>
+    <script>
+        window.onload = () => {
+            const socket = io();
+            socket.on('connect', () => {
+                document.getElementById("connectedIndicator").innerHTML = "Connected";
+                document.getElementById("connectedIndicator").classList.add("connected");
+
+                socket.emit('getrssi');
+                socket.emit('getbattery');
+            });
+            socket.on('disconnect', () => {
+                document.getElementById("connectedIndicator").innerHTML = "Disconnected";
+                document.getElementById("connectedIndicator").classList.remove("connected");
+            });
+            socket.on('rssi', (message) => {
+                document.getElementById("rssi").innerHTML = message;
+            });
+            socket.on('battery', (message) => {
+                document.getElementById("battery").innerHTML = message;
+            });
+
+            // when a slider is moved, update the val element
+            document.getElementById('shock').addEventListener('input', (e) => {
+                document.getElementById('shockVal').innerHTML = "Shock: " + e.target.value;
+            });
+            document.getElementById('vibro').addEventListener('input', (e) => {
+                document.getElementById('vibroVal').innerHTML = "Vibro: " + e.target.value;
+            });
+            document.getElementById('sound').addEventListener('input', (e) => {
+                document.getElementById('soundVal').innerHTML = "Sound:" + e.target.value;
+            });
+
+            document.getElementById('msgform').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const shock = parseInt(document.getElementById('shock').value) || 0;
+                const vibro = parseInt(document.getElementById('vibro').value) || 0;
+                const sound = parseInt(document.getElementById('sound').value) || 0;
+                socket.emit('command', {
+                    shock,
+                    vibro,
+                    sound
+                });
+            });
+            document.getElementById('find').addEventListener('click', (e) => {
+                e.preventDefault();
+                socket.emit('command', {
+                    find: true
+                });
+            });
+            document.getElementById('rssiRefresh').addEventListener('click', (e) => {
+                e.preventDefault();
+                socket.emit('getrssi');
+            });
+            document.getElementById('batteryRefresh').addEventListener('click', (e) => {
+                e.preventDefault();
+                socket.emit('getbattery');
+            });
+        };
+    </script>
+    <style>
+        /* add a nice looking UI style */
+        body {
+            font-family: sans-serif;
+            text-align: center;
+            background-color: #000;
+            color: #fff;
+        }
+
+        h1 {
+            font-size: 2em;
+        }
+
+        form input {
+            font-size: 1em;
+            border-radius: 4px;
+            padding: 4px;
+            margin: 4px;
+        }
+
+        form input[type="submit"] {
+            border: 1px solid #ccc;
+            background-color: #fff;
+            cursor: pointer;
+        }
+
+        form input[type="submit"]:hover {
+            background-color: #eee;
+        }
+
+        form input[type="submit"]:active {
+            background-color: #ddd;
+        }
+
+        #find {
+            margin-top: 1rem;
+            /* add padding on the sides */
+            padding: 0.2rem 1rem;
+        }
+
+        button {
+            font-size: 1em;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #eee;
+        }
+
+        button:active {
+            background-color: #ddd;
+        }
+
+        .connected {
+            color: green;
+        }
+
+        input[type='range'] {
+            overflow: hidden;
+            width: 300px;
+            height: 25px;
+            appearance: none;
+            background-color: #333;
+            -webkit-appearance: none;
+        }
+
+        input[type='range']::-webkit-slider-thumb {
+            width: 10px;
+            -webkit-appearance: none;
+            height: 10px;
+            cursor: ew-resize;
+            background: #434343;
+            box-shadow: -160px 0 0 160px #963b38;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Collar controller</h1>
+    <form id="msgform">
+        <p id="shockVal">Shock: 0</p>
+        <input type="range" id="shock" min="0" max="100" value="0">
+        <p id="vibroVal">Vibro: 0</p>
+        <input type="range" id="vibro" min="0" max="100" value="0">
+        <p id="soundVal">Sound: 0</p>
+        <input type="range" id="sound" min="0" max="100" value="0">
+        <br><br>
+        <input type="submit" value="Submit">
+    </form>
+    <button id="find">Find</button>
+    <p id="connectedIndicator">Disconnected</p>
+    <p id="rssiIndicator">RSSI: <span id="rssi">0</span> dBm <button id="rssiRefresh">Refresh</button></p>
+    <p id="batteryIndicator">Battery: <span id="battery">0</span> % <button id="batteryRefresh">Refresh</button></p>
+    <br>
+</body>
+
+</html>

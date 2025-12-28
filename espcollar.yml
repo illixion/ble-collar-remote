@@ -1,0 +1,163 @@
+esphome:
+  name: ble-bridge
+  friendly_name: ble-bridge
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: info
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "yourkeyhere"
+  services:
+    - service: collar_command
+      variables:
+        zap: int
+        vibrate: int
+        sound: int
+        find: bool
+      then:
+        - script.execute:
+            id: write_ble_command
+            zap: !lambda 'return zap;'
+            vibrate: !lambda 'return vibrate;'
+            sound: !lambda 'return sound;'
+            find: !lambda 'return find;'
+
+        - delay: 250ms
+
+        - script.execute:
+            id: write_ble_command
+            zap: !lambda 'return zap;'
+            vibrate: !lambda 'return vibrate;'
+            sound: !lambda 'return sound;'
+            find: !lambda 'return find;'
+
+ota:
+  - platform: esphome
+    password: "yourkeyhere"
+
+wifi:
+  ssid: yourwifihere
+  password: yourkeyhere
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Ble-Bridge Fallback Hotspot"
+    password: "yourkeyhere"
+
+captive_portal:
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+
+ble_client:
+  - mac_address: XX:XX:XX:XX:XX:XX
+    id: shock_collar
+    on_connect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ble_client_lambda", "Connected to BLE device");
+            id(shock_collar_status).publish_state(true);
+        - delay: 2s
+        - script.execute:
+            id: get_battery_level
+    on_disconnect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ble_client_lambda", "Disconnected from BLE device");
+            id(shock_collar_status).publish_state(false);
+
+binary_sensor:
+  - platform: template
+    id: shock_collar_status
+    device_class: connectivity
+
+sensor:
+  - platform: ble_client
+    type: rssi
+    ble_client_id: shock_collar
+    name: "Collar RSSI"
+  - platform: ble_client
+    id: shock_collar_battery
+    type: characteristic
+    ble_client_id: shock_collar
+    name: "Collar Battery Level"
+    service_uuid: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+    characteristic_uuid: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+    notify: true
+    lambda: |-
+      if (x.size() >= 6 && x[0] == 0xaa && x[1] == 0x07) {
+        return x[5];
+      } else {
+        return id(shock_collar_battery).state;
+      }
+    icon: "mdi:battery"
+    unit_of_measurement: "%"
+
+button:
+  - platform: template
+    name: "Fetch battery level"
+    on_press:
+      - script.execute:
+          id: get_battery_level
+
+switch:
+  - platform: shutdown
+    name: "BLE shutdown"
+
+interval:
+  - interval: 30min
+    then:
+      - script.execute:
+          id: get_battery_level
+
+script:
+  - id: get_battery_level
+    then:
+      - ble_client.ble_write:
+          id: shock_collar
+          service_uuid: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+          characteristic_uuid: 6E400002-B5A3-F393-E0A9-E50E24DCCA9E
+          value: [0xdd, 0xaa, 0xbb]
+  - id: write_ble_command
+    parameters:
+      zap: int
+      vibrate: int
+      sound: int
+      find: bool
+    then:
+      - ble_client.ble_write:
+          id: shock_collar
+          service_uuid: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+          characteristic_uuid: 6E400002-B5A3-F393-E0A9-E50E24DCCA9E
+          value: !lambda |-
+            // Ensure that all values are between 0 and 100
+            if (zap < 0) zap = 0;
+            if (zap > 100) zap = 100;
+            if (vibrate < 0) vibrate = 0;
+            if (vibrate > 100) vibrate = 100;
+            if (sound < 0) sound = 0;
+            if (sound > 100) sound = 100;
+
+            std::vector<uint8_t> command;
+
+            if (find) {
+              command = {0xee, 0x02, 0xbb};
+            } else {
+              // Set default values if any are missing
+              if (zap == 0) zap = 0;
+              if (vibrate == 0) vibrate = 0;
+              if (sound == 0) sound = 0;
+              command = {0xaa, 0x07, (uint8_t)zap, (uint8_t)vibrate, (uint8_t)sound, 0xbb};
+            }
+
+            // Return the command
+            return command;

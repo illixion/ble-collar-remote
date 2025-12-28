@@ -1,0 +1,20 @@
+{
+  "device": {
+    "macAddress": "XX:XX:XX:XX:XX:XX",
+    "addressType": "public"
+  },
+  "server": {
+    "port": 3000
+  },
+  "ble": {
+    "reconnectDelay": 5000,
+    "batteryCheckInterval": 1800000,
+    "scanDuration": 10000
+  },
+  "forwarder": {
+    "url": null
+  },
+  "logging": {
+    "level": "info"
+  }
+}
