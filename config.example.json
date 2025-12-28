@@ -4,7 +4,8 @@
     "addressType": "public"
   },
   "server": {
-    "port": 3000
+    "port": 3000,
+    "token": "YOUR_SECRET_TOKEN_HERE_OR_EMPTY_TO_DISABLE"
   },
   "ble": {
     "reconnectDelay": 5000,

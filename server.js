@@ -28,6 +28,11 @@ if (!fs.existsSync(CONFIG_PATH)) {
 
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
+// Authentication config - empty string or "none" disables authentication
+const rawToken = config.server?.token;
+const AUTH_ENABLED = rawToken && rawToken !== 'none' && rawToken.trim() !== '';
+const AUTH_TOKEN = AUTH_ENABLED ? rawToken : null;
+
 // Initialize logger
 const logger = new Logger({ level: config.logging?.level || 'info' });
 const bleLogger = logger.child('ble');
@@ -66,6 +71,7 @@ function initForwarder() {
     reconnection: true,
     reconnectionDelay: 5000,
     reconnectionAttempts: Infinity,
+    auth: { token: AUTH_TOKEN },
   });
 
   forwarderSocket.on('connect', () => {
@@ -345,6 +351,18 @@ function start() {
   });
 }
 
+// Socket.io authentication middleware (skipped if auth disabled)
+if (AUTH_ENABLED) {
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    if (!token || token !== AUTH_TOKEN) {
+      wsLogger.warn('Unauthorized WebSocket connection attempt', { address: socket.handshake.address });
+      return next(new Error('Unauthorized'));
+    }
+    next();
+  });
+}
+
 // Socket.io event handlers
 io.on('connection', (socket) => {
   wsLogger.info(`Client connected`, { address: socket.handshake.address });
@@ -404,53 +422,86 @@ io.on('connection', (socket) => {
 app.use(bodyParser.json());
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
 });
 
-// API routes
-app.get('/api/command', (req, res) => {
+/**
+ * Validate authentication token from request.
+ * Checks Authorization header (Bearer token) or query parameter.
+ * Skips validation if authentication is disabled.
+ */
+function validateToken(req, res, next) {
+  if (!AUTH_ENABLED) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  const queryToken = req.query.token;
+
+  let token = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  } else if (queryToken) {
+    token = queryToken;
+  }
+
+  if (!token || token !== AUTH_TOKEN) {
+    httpLogger.warn('Unauthorized API request', { ip: req.ip, path: req.path });
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  next();
+}
+
+// API routes (all require authentication)
+app.get('/api/command', validateToken, (req, res) => {
   sendCommand(req.query, req.ip);
   res.send('OK');
 });
 
-app.get('/api/shockandincrease', (req, res) => {
+app.get('/api/shockandincrease', validateToken, (req, res) => {
   let pValue = getValue('pValue') + 10;
   sendCommand({ shock: pValue }, req.ip);
   setValue('pValue', pValue);
   res.send('OK');
 });
 
-app.get('/api/battery', (req, res) => {
+app.get('/api/battery', validateToken, (req, res) => {
   res.send(batteryLevel.toString());
 });
 
-app.get('/api/pValue', (req, res) => {
+app.get('/api/pValue', validateToken, (req, res) => {
   res.send(getValue('pValue').toString());
 });
 
-app.post('/api/pValue', (req, res) => {
+app.post('/api/pValue', validateToken, (req, res) => {
   setValue('pValue', parseInt(req.body.value, 10) || 0);
   res.send('OK');
 });
 
-app.get('/api/sValue', (req, res) => {
+app.get('/api/sValue', validateToken, (req, res) => {
   res.send(getValue('sValue').toString());
 });
 
-app.post('/api/sValue', (req, res) => {
+app.post('/api/sValue', validateToken, (req, res) => {
   setValue('sValue', parseInt(req.body.value, 10) || 0);
   res.send('OK');
 });
 
-app.get('/api/scan', async (req, res) => {
+app.get('/api/auth/status', (req, res) => {
+  res.json({ enabled: AUTH_ENABLED });
+});
+
+app.get('/api/scan', validateToken, (req, res) => {
   if (!bleManager) {
     res.status(503).json({ error: 'BLE manager not initialized' });
     return;
   }
   const duration = parseInt(req.query.duration, 10) || 10000;
-  const devices = await scanForDevices(bleManager, logger, duration);
-  res.json(devices);
+  scanForDevices(bleManager, logger, duration);
+  res.send('OK');
 });
 
 // Serve static files
@@ -459,6 +510,9 @@ app.use(express.static('public'));
 // Start server
 server.listen(port, () => {
   httpLogger.info(`Server listening on port ${port}`);
+  if (!AUTH_ENABLED) {
+    httpLogger.warn('Authentication is DISABLED - server is publicly accessible');
+  }
 });
 
 // Graceful shutdown

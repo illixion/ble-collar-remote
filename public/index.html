@@ -9,24 +9,99 @@
 
     <script src="socket.io.min.js"></script>
     <script>
-        window.onload = () => {
-            const socket = io();
+        let socket = null;
+
+        function getToken() {
+            return localStorage.getItem('authToken') || '';
+        }
+
+        function setToken(token) {
+            localStorage.setItem('authToken', token);
+        }
+
+        function connect(withToken = true) {
+            if (socket) {
+                socket.disconnect();
+            }
+
+            const token = getToken();
+            const options = {};
+            if (withToken && token) {
+                options.auth = { token };
+            }
+
+            socket = io(options);
+
             socket.on('connect', () => {
                 document.getElementById("connectedIndicator").innerHTML = "Connected";
                 document.getElementById("connectedIndicator").classList.add("connected");
+                if (withToken && token) {
+                    document.getElementById("tokenStatus").innerHTML = "Valid";
+                    document.getElementById("tokenStatus").classList.add("connected");
+                } else {
+                    document.getElementById("tokenStatus").innerHTML = "(no auth)";
+                    document.getElementById("tokenStatus").classList.add("connected");
+                }
 
                 socket.emit('getrssi');
                 socket.emit('getbattery');
             });
+
+            socket.on('connect_error', (err) => {
+                if (err.message === 'Unauthorized') {
+                    document.getElementById("connectedIndicator").innerHTML = "Invalid token";
+                    document.getElementById("tokenStatus").innerHTML = "Invalid";
+                    document.getElementById("tokenStatus").classList.remove("connected");
+                } else {
+                    document.getElementById("connectedIndicator").innerHTML = "Connection error";
+                }
+                document.getElementById("connectedIndicator").classList.remove("connected");
+            });
+
             socket.on('disconnect', () => {
                 document.getElementById("connectedIndicator").innerHTML = "Disconnected";
                 document.getElementById("connectedIndicator").classList.remove("connected");
             });
+
             socket.on('rssi', (message) => {
                 document.getElementById("rssi").innerHTML = message;
             });
+
             socket.on('battery', (message) => {
                 document.getElementById("battery").innerHTML = message;
+            });
+        }
+
+        window.onload = async () => {
+            // Check if auth is enabled
+            let authEnabled = true;
+            try {
+                const res = await fetch('/api/auth/status');
+                const data = await res.json();
+                authEnabled = data.enabled;
+            } catch (e) {
+                // Assume auth enabled if we can't reach the endpoint
+            }
+
+            if (!authEnabled) {
+                // Hide token section when auth is disabled
+                document.querySelector('.token-section').style.display = 'none';
+                connect(false);
+            } else {
+                // Load saved token and try to connect
+                const savedToken = getToken();
+                if (savedToken) {
+                    document.getElementById('token').value = savedToken;
+                }
+                connect(!!savedToken);
+            }
+
+            // Token save button
+            document.getElementById('saveToken').addEventListener('click', (e) => {
+                e.preventDefault();
+                const token = document.getElementById('token').value.trim();
+                setToken(token);
+                connect(!!token);
             });
 
             // when a slider is moved, update the val element
@@ -42,6 +117,7 @@
 
             document.getElementById('msgform').addEventListener('submit', (e) => {
                 e.preventDefault();
+                if (!socket || !socket.connected) return;
                 const shock = parseInt(document.getElementById('shock').value) || 0;
                 const vibro = parseInt(document.getElementById('vibro').value) || 0;
                 const sound = parseInt(document.getElementById('sound').value) || 0;
@@ -53,16 +129,19 @@
             });
             document.getElementById('find').addEventListener('click', (e) => {
                 e.preventDefault();
+                if (!socket || !socket.connected) return;
                 socket.emit('command', {
                     find: true
                 });
             });
             document.getElementById('rssiRefresh').addEventListener('click', (e) => {
                 e.preventDefault();
+                if (!socket || !socket.connected) return;
                 socket.emit('getrssi');
             });
             document.getElementById('batteryRefresh').addEventListener('click', (e) => {
                 e.preventDefault();
+                if (!socket || !socket.connected) return;
                 socket.emit('getbattery');
             });
         };
@@ -143,11 +222,39 @@
             background: #434343;
             box-shadow: -160px 0 0 160px #963b38;
         }
+
+        .token-section {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background-color: #111;
+            border-radius: 8px;
+            display: inline-block;
+        }
+
+        .token-section input[type="password"] {
+            width: 200px;
+            padding: 8px;
+            background-color: #222;
+            border: 1px solid #444;
+            color: #fff;
+        }
+
+        .token-section button {
+            padding: 8px 16px;
+        }
     </style>
 </head>
 
 <body>
     <h1>Collar controller</h1>
+
+    <div class="token-section">
+        <label for="token">Token: </label>
+        <input type="password" id="token" placeholder="Enter auth token">
+        <button id="saveToken">Connect</button>
+        <span id="tokenStatus"></span>
+    </div>
+
     <form id="msgform">
         <p id="shockVal">Shock: 0</p>
         <input type="range" id="shock" min="0" max="100" value="0">

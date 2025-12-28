@@ -49,6 +49,22 @@ A Node.js application for controlling BLE shock collars based on the BK3633 SoC 
    }
    ```
 
+5. Set your authentication token in `config.json`:
+   ```json
+   {
+     "server": {
+       "token": "YOUR_SECURE_TOKEN"
+     }
+   }
+   ```
+
+6. Start the server with root privileges:
+   ```bash
+   sudo node server.js
+   ```
+
+7. (optional) Add an nginx reverse proxy for easier access and HTTPS. This is **required** if you want to expose the server to the internet, and using authentication is strongly encouraged.
+
 ## Finding Your Device's MAC Address
 
 Run the server without a configured MAC address, or use the scan API endpoint. The application will scan for nearby devices advertising the Nordic UART Service and log their addresses:
@@ -91,11 +107,55 @@ Edit `config.json` to customize behavior:
 | `device.macAddress` | BLE MAC address of your device | Required |
 | `device.addressType` | BLE address type (`public` or `random`) | `public` |
 | `server.port` | HTTP server port | `3000` |
+| `server.token` | Authentication token (set to `""` or `"none"` to disable) | Optional |
 | `ble.reconnectDelay` | Delay before reconnecting (ms) | `5000` |
 | `ble.batteryCheckInterval` | Battery check interval (ms) | `1800000` |
 | `ble.scanDuration` | Device scan duration (ms) | `10000` |
 | `forwarder.url` | URL of a forwarder server for relay mode | `null` |
 | `logging.level` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
+
+## Authentication
+
+Authentication can be enabled by setting a token in `config.json`. When enabled, all API endpoints and WebSocket connections require the token.
+
+To disable authentication, set the token to an empty string `""` or `"none"`:
+```json
+{
+  "server": {
+    "token": ""
+  }
+}
+```
+
+When authentication is disabled, the server will log a warning on startup.
+
+### HTTP API Authentication
+
+Include the token in one of these ways:
+
+1. **Authorization header** (recommended):
+   ```bash
+   curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/api/battery
+   ```
+
+2. **Query parameter**:
+   ```bash
+   curl "http://localhost:3000/api/battery?token=YOUR_TOKEN"
+   ```
+
+### WebSocket Authentication
+
+When connecting via Socket.io, provide the token in the auth object:
+
+```javascript
+const socket = io('http://localhost:3000', {
+  auth: { token: 'YOUR_TOKEN' }
+});
+```
+
+### Web Interface
+
+The web interface includes a token input field. Enter your token and click "Connect" to authenticate. The token is saved to localStorage for convenience.
 
 ## API Reference
 
