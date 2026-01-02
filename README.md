@@ -185,7 +185,7 @@ Returns the current battery level (0-100).
 GET /api/scan?duration=<ms>
 ```
 
-Scan for compatible BLE devices. Returns JSON array of found devices.
+Scan for compatible BLE devices. Results are only printed in logs.
 
 ### Progressive Shock
 ```
