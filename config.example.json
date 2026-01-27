@@ -11,7 +11,8 @@
     "hciInterface": 0,
     "reconnectDelay": 5000,
     "batteryCheckInterval": 1800000,
-    "scanDuration": 10000
+    "scanDuration": 10000,
+    "deviceNamePatterns": ["btt_xg_"]
   },
   "forwarder": {
     "url": null

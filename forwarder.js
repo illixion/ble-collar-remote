@@ -215,7 +215,8 @@ function connectToBleDevice(manager, addressType, address, options, callback) {
 function start() {
   createBleManager((manager) => {
     // Scan for compatible devices before connecting
-    scanForDevices(manager, logger, config.ble?.scanDuration || 10000).then(
+    const namePatterns = config.ble?.deviceNamePatterns || [];
+    scanForDevices(manager, logger, config.ble?.scanDuration || 10000, namePatterns).then(
       (devices) => {
         if (devices.length > 0) {
           bleLogger.info('Compatible devices found during scan:', devices);
@@ -337,7 +338,8 @@ app.get('/api/scan', validateToken, (req, res) => {
     return;
   }
   const duration = parseInt(req.query.duration, 10) || 10000;
-  scanForDevices(bleManager, logger, duration);
+  const namePatterns = config.ble?.deviceNamePatterns || [];
+  scanForDevices(bleManager, logger, duration, namePatterns);
   res.send('OK');
 });
 
