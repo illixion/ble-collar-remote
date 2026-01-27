@@ -4,6 +4,7 @@
     "addressType": "public"
   },
   "server": {
+    "host": "0.0.0.0",
     "port": 3000,
     "token": "YOUR_SECRET_TOKEN_HERE_OR_EMPTY_TO_DISABLE"
   },

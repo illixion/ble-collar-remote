@@ -356,8 +356,9 @@ app.get('/api/scan', validateToken, (req, res) => {
 app.use(express.static('public'));
 
 // Start server
-server.listen(port, () => {
-  httpLogger.info(`Forwarder listening on port ${port}`);
+const host = config.server?.host || '0.0.0.0';
+server.listen(port, host, () => {
+  httpLogger.info(`Server listening on ${host}:${port}`);
   if (!AUTH_ENABLED) {
     httpLogger.warn('Authentication is DISABLED - server is publicly accessible');
   }
