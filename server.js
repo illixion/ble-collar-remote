@@ -16,6 +16,35 @@ const BleManager = NodeBleHost.BleManager;
 const HciErrors = NodeBleHost.HciErrors;
 const AttErrors = NodeBleHost.AttErrors;
 
+/**
+ * Extract real client IP from request, respecting X-Forwarded-For header.
+ * @param {Object} req - Express request object
+ * @returns {string} Client IP address
+ */
+function getClientIp(req) {
+  // Check X-Forwarded-For header (set by reverse proxies like Tailscale serve)
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    // X-Forwarded-For can contain multiple IPs, first one is the original client
+    return forwarded.split(',')[0].trim();
+  }
+  // Fallback to direct connection IP
+  return req.ip || req.connection?.remoteAddress || 'unknown';
+}
+
+/**
+ * Extract real client IP from Socket.io handshake.
+ * @param {Object} socket - Socket.io socket object
+ * @returns {string} Client IP address
+ */
+function getSocketClientIp(socket) {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  if (forwarded) {
+    return forwarded.split(',')[0].trim();
+  }
+  return socket.handshake.address || 'unknown';
+}
+
 // Load configuration
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const CONFIG_EXAMPLE_PATH = path.join(__dirname, 'config.example.json');
@@ -367,7 +396,7 @@ if (AUTH_ENABLED) {
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
     if (!token || token !== AUTH_TOKEN) {
-      wsLogger.warn('Unauthorized WebSocket connection attempt', { address: socket.handshake.address });
+      wsLogger.warn('Unauthorized WebSocket connection attempt', { address: getSocketClientIp(socket) });
       return next(new Error('Unauthorized'));
     }
     next();
@@ -376,15 +405,16 @@ if (AUTH_ENABLED) {
 
 // Socket.io event handlers
 io.on('connection', (socket) => {
-  wsLogger.info(`Client connected`, { address: socket.handshake.address });
+  const clientIp = getSocketClientIp(socket);
+  wsLogger.info(`Client connected`, { address: clientIp });
 
   socket.on('command', (data) => {
-    sendCommand(data, socket.handshake.address);
+    sendCommand(data, clientIp);
   });
 
   socket.on('sendandincrease', () => {
     let pValue = getValue('pValue');
-    sendCommand({ shock: pValue }, socket.handshake.address);
+    sendCommand({ shock: pValue }, clientIp);
     pValue += 10;
     setValue('pValue', pValue);
   });
@@ -425,7 +455,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    wsLogger.debug('Client disconnected', { address: socket.handshake.address });
+    wsLogger.debug('Client disconnected', { address: clientIp });
   });
 });
 
@@ -458,7 +488,7 @@ function validateToken(req, res, next) {
   }
 
   if (!token || token !== AUTH_TOKEN) {
-    httpLogger.warn('Unauthorized API request', { ip: req.ip, path: req.path });
+    httpLogger.warn('Unauthorized API request', { ip: getClientIp(req), path: req.path });
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -468,13 +498,13 @@ function validateToken(req, res, next) {
 
 // API routes (all require authentication)
 app.get('/api/command', validateToken, (req, res) => {
-  sendCommand(req.query, req.ip);
+  sendCommand(req.query, getClientIp(req));
   res.send('OK');
 });
 
 app.get('/api/shockandincrease', validateToken, (req, res) => {
   let pValue = getValue('pValue') + 10;
-  sendCommand({ shock: pValue }, req.ip);
+  sendCommand({ shock: pValue }, getClientIp(req));
   setValue('pValue', pValue);
   res.send('OK');
 });
