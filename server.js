@@ -331,21 +331,30 @@ function connectToBleDevice(manager, addressType, address, options, callback) {
  */
 function start() {
   createBleManager((manager) => {
-    // Scan for compatible devices before connecting
-    const namePatterns = config.ble?.deviceNamePatterns || [];
-    scanForDevices(manager, logger, config.ble?.scanDuration || 10000, namePatterns).then(
-      (devices) => {
-        if (devices.length > 0) {
-          bleLogger.info('Compatible devices found during scan:', devices);
-        }
+    const connectToDevice = () => {
+      // Connect to configured device
+      const { macAddress, addressType } = config.device;
+      connectToBleDevice(manager, addressType || 'public', macAddress, {}, (conn) => {
+        bleLogger.info(`Connected to ${conn.peerAddress}`);
+      });
+    };
 
-        // Connect to configured device
-        const { macAddress, addressType } = config.device;
-        connectToBleDevice(manager, addressType || 'public', macAddress, {}, (conn) => {
-          bleLogger.info(`Connected to ${conn.peerAddress}`);
-        });
-      }
-    );
+    // Conditionally scan before connecting
+    if (config.ble?.scanOnStart !== false) {
+      // Scan for compatible devices before connecting
+      const namePatterns = config.ble?.deviceNamePatterns || [];
+      scanForDevices(manager, logger, config.ble?.scanDuration || 10000, namePatterns).then(
+        (devices) => {
+          if (devices.length > 0) {
+            bleLogger.info('Compatible devices found during scan:', devices);
+          }
+          connectToDevice();
+        }
+      );
+    } else {
+      bleLogger.info('Scan on start disabled, connecting immediately');
+      connectToDevice();
+    }
 
     // Set up battery check interval
     const batteryInterval = config.ble?.batteryCheckInterval || 30 * 60 * 1000;

@@ -49,6 +49,8 @@ A Node.js application for controlling BLE shock collars based on the BK3633 SoC 
    }
    ```
 
+   You may also need to change your hci interface number if you have multiple Bluetooth adapters. Run `btmgmt info` to see available interfaces, then update `ble.hciInterface` in `config.json` accordingly. If the scanner fails to find your device, try using LightBlue on your phone to find the device name, then add it to `ble.deviceNamePatterns` in the config.
+
 5. Set your authentication token in `config.json`:
    ```json
    {

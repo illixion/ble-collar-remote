@@ -12,7 +12,8 @@
     "reconnectDelay": 5000,
     "batteryCheckInterval": 1800000,
     "scanDuration": 10000,
-    "deviceNamePatterns": ["btt_xg_"]
+    "deviceNamePatterns": ["btt_xg_"],
+    "scanOnStart": true
   },
   "forwarder": {
     "url": null
