@@ -247,7 +247,8 @@ function getBatteryLevel() {
  * Create and initialize the BLE manager.
  */
 function createBleManager(callback) {
-  transport = new HciSocket(0);
+  const hciInterface = config.ble?.hciInterface || 0;
+  transport = new HciSocket(hciInterface);
 
   BleManager.create(transport, {}, (err, manager) => {
     if (err) {

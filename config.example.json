@@ -8,6 +8,7 @@
     "token": "YOUR_SECRET_TOKEN_HERE_OR_EMPTY_TO_DISABLE"
   },
   "ble": {
+    "hciInterface": 0,
     "reconnectDelay": 5000,
     "batteryCheckInterval": 1800000,
     "scanDuration": 10000
