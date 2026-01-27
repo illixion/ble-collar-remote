@@ -65,7 +65,7 @@ A Node.js application for controlling BLE shock collars based on the BK3633 SoC 
    sudo node server.js
    ```
 
-7. (optional) Add an nginx reverse proxy for easier access and HTTPS. This is **required** if you want to expose the server to the internet, and using authentication is strongly encouraged.
+7. (optional) Add an nginx reverse proxy for easier access and HTTPS. This is **required** if you want to expose the server to the internet, and using authentication is strongly encouraged. For non-technical users, I recommend using Tailscale since it issues certificates automatically, run `tailscale serve --bg http://127.0.0.1:3000` to allow access within your Tailnet only or `tailscale funnel --bg http://127.0.0.1:3000` to allow public access with HTTPS.
 
 ## Finding Your Device's MAC Address
 
