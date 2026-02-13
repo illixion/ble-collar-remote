@@ -10,9 +10,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "ble-host": "^1.0.3",
+    "@stoprocent/noble": "^2.3.10",
     "express": "^4.18.2",
-    "hci-socket": "^1.0.0",
     "socket.io": "^4.5.4",
     "socket.io-client": "^4.7.2"
   }
