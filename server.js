@@ -75,6 +75,7 @@ let noble = null;
 let blePeripheral = null;
 let bleTxChar = null;
 let batteryLevel = 100;
+let isConnecting = false;
 
 // Forwarder client for relay mode
 let forwarderSocket = null;
@@ -329,6 +330,12 @@ async function findPeripheral(namePatterns, timeout = 30000) {
  * Connect to the BLE device and set up characteristic handlers.
  */
 async function connectToBleDevice(address, addressType) {
+  if (isConnecting) {
+    bleLogger.debug('Connection attempt already in progress, skipping');
+    return;
+  }
+  isConnecting = true;
+
   bleLogger.info('Connecting to device', { address, addressType });
 
   try {
@@ -346,7 +353,7 @@ async function connectToBleDevice(address, addressType) {
       blePeripheral = await noble.connectAsync(address);
     }
 
-    bleLogger.info(`Connected to ${blePeripheral.address}`);
+    bleLogger.info(`Connected to ${blePeripheral.advertisement?.localName || blePeripheral.address}`);
 
     // Discover UART service and characteristics
     const { characteristics } = await blePeripheral.discoverSomeServicesAndCharacteristicsAsync(
@@ -358,6 +365,8 @@ async function connectToBleDevice(address, addressType) {
       // RX characteristic - subscribe for notifications
       if (char.uuid === BLE_UUIDS_NOBLE.RX_CHARACTERISTIC) {
         await char.subscribeAsync();
+        // Remove previous data listeners to prevent accumulation (noble reuses objects)
+        char.removeAllListeners('data');
         char.on('data', (data, isNotification) => {
           if (!isNotification) return;
           if (
@@ -383,8 +392,10 @@ async function connectToBleDevice(address, addressType) {
       bleLogger.error('TX characteristic not found on device');
     }
 
-    // Handle disconnect with auto-reconnect
-    blePeripheral.on('disconnect', () => {
+    isConnecting = false;
+
+    // Use once() to prevent handler accumulation (noble reuses Peripheral objects)
+    blePeripheral.once('disconnect', () => {
       bleLogger.warn('Disconnected from device');
       bleTxChar = null;
       blePeripheral = null;
@@ -399,6 +410,7 @@ async function connectToBleDevice(address, addressType) {
     });
 
   } catch (err) {
+    isConnecting = false;
     bleLogger.error('Connection failed', { error: err.message });
     const reconnectDelay = config.ble?.reconnectDelay || 5000;
     bleLogger.info(`Retrying connection in ${reconnectDelay / 1000} seconds...`);
