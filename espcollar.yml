@@ -1,16 +1,17 @@
 esphome:
   name: ble-bridge
   friendly_name: ble-bridge
-  libraries:
-    - "links2004/WebSockets@^2.4.0"
-    - "bblanchon/ArduinoJson@^6.21.0"
-  includes:
-    - ws_forwarder.h
 
 esp32:
   board: esp32dev
   framework:
     type: arduino
+
+# Load the WebSocket forwarder component from the local components directory
+external_components:
+  - source:
+      type: local
+      path: components
 
 # Enable logging
 logger:
@@ -125,16 +126,15 @@ interval:
       - script.execute:
           id: get_battery_level
 
-# WebSocket forwarder custom component
-custom_component:
-  - lambda: |-
-      // Configuration - update these values
-      auto *forwarder = new WsForwarder(
-        "ws://192.168.1.100:3000/ws/node",  // Server WebSocket URL
-        "YOUR_SECRET_TOKEN",                   // Auth token
-        "esp32-ble-bridge"                     // Node ID
-      );
-      return {forwarder};
+# WebSocket forwarder - connects to central server's node pool
+ws_forwarder:
+  server_url: "ws://192.168.1.100:3000/ws/node"
+  token: "YOUR_SECRET_TOKEN"
+  node_id: "esp32-ble-bridge"
+  ble_client_id: shock_collar
+  status_sensor: shock_collar_status
+  battery_sensor: shock_collar_battery
+  rssi_sensor: collar_rssi
 
 script:
   - id: get_battery_level

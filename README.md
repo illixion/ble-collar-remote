@@ -342,14 +342,14 @@ When the active node loses its BLE connection:
 
 The `espcollar.yml` file provides an ESPHome configuration for ESP32 boards that implements the same forwarder protocol over WebSocket.
 
-1. Copy `espcollar.yml` and `ws_forwarder.h` to your ESPHome config directory
+1. Copy `espcollar.yml` and the `components/` directory to your ESPHome config directory
 2. Edit `espcollar.yml`:
    - Set your WiFi credentials
    - Set the collar's MAC address in `ble_client`
-   - Set the server URL, auth token, and node ID in the `custom_component` section
+   - Set the server URL, auth token, and node ID in the `ws_forwarder` section
 3. Flash to your ESP32
 
-The ESP32 forwarder uses the `links2004/WebSockets` library for WebSocket client support and communicates with the server using the same JSON protocol as the Node.js forwarder.
+The forwarder is implemented as an ESPHome [external component](https://esphome.io/components/external_components) in `components/ws_forwarder/`. It uses the `links2004/WebSockets` library for WebSocket client support and ArduinoJson for message serialization, communicating with the server using the same JSON protocol as the Node.js forwarder.
 
 ### Node Protocol
 
@@ -376,11 +376,14 @@ Linux support uses HCI bindings via `@stoprocent/noble`. Root privileges are req
 ```
 ├── server.js                       # Central server (HTTP API, Socket.io, node pool, local BLE)
 ├── forwarder.js                    # Headless forwarder node (WebSocket client + BLE bridge)
-├── ws_forwarder.h                  # ESP32 WebSocket forwarder component (C++ for ESPHome)
 ├── config.json                     # Server configuration (create from example)
 ├── config.example.json             # Example server configuration
 ├── config.forwarder.example.json   # Example forwarder node configuration
 ├── espcollar.yml                   # ESPHome configuration for ESP32 forwarder
+├── components/
+│   └── ws_forwarder/               # ESPHome external component
+│       ├── __init__.py             # Component registration and code generation
+│       └── ws_forwarder.h          # WebSocket forwarder C++ implementation
 ├── lib/
 │   ├── ble-device.js               # BLE device connection manager (shared by server & forwarder)
 │   ├── node-pool.js                # Forwarder node pool with handoff logic
