@@ -15,13 +15,15 @@ The following app was used when researching the protocol: [App Store](https://ap
 - Battery level monitoring
 - Auto-reconnection on disconnect
 - Configurable logging levels
-- ESPHome configuration for Home Assistant integration
+- **Multi-node forwarder support** with automatic RSSI-based handoff
+- **ESP32 forwarder support** via ESPHome with WebSocket client
+- **macOS and Linux support** via `@stoprocent/noble`
 
 ## Requirements
 
-- Linux system with Bluetooth adapter (BlueZ)
 - Node.js 16+
-- Root privileges (for raw HCI socket access)
+- **Linux**: Bluetooth adapter (BlueZ), root privileges for raw HCI socket access
+- **macOS**: Built-in Bluetooth or compatible adapter (no root required, uses CoreBluetooth via `@stoprocent/noble`)
 
 ## Installation
 
@@ -51,7 +53,9 @@ The following app was used when researching the protocol: [App Store](https://ap
    }
    ```
 
-   You may also need to change your hci interface number if you have multiple Bluetooth adapters. Run `btmgmt info` to see available interfaces, then update `ble.hciInterface` in `config.json` accordingly. If the scanner fails to find your device, try using LightBlue on your phone to find the device name, then add it to `ble.deviceNamePatterns` in the config.
+   **Linux**: You may need to change your HCI interface number if you have multiple Bluetooth adapters. Run `btmgmt info` to see available interfaces, then update `ble.hciInterface` in `config.json` accordingly.
+
+   **macOS**: CoreBluetooth does not expose MAC addresses. The server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`. If the scanner fails to find your device, use [LightBlue](https://apps.apple.com/us/app/lightblue/id557428110) on your phone to find the device name, then add it to `ble.deviceNamePatterns` in the config.
 
 5. Set your authentication token in `config.json`:
    ```json
@@ -62,9 +66,13 @@ The following app was used when researching the protocol: [App Store](https://ap
    }
    ```
 
-6. Start the server with root privileges:
+6. Start the server:
    ```bash
+   # Linux (requires root for HCI access)
    sudo node server.js
+
+   # macOS (no root needed)
+   node server.js
    ```
 
 7. (optional) Add an nginx reverse proxy for easier access and HTTPS. This is **required** if you want to expose the server to the internet, and using authentication is strongly encouraged. For non-technical users, I recommend using Tailscale since it issues certificates automatically, run `tailscale serve --bg http://127.0.0.1:3000` to allow access within your Tailnet only or `tailscale funnel --bg http://127.0.0.1:3000` to allow public access with HTTPS.
@@ -89,15 +97,18 @@ curl http://localhost:3000/api/scan
 
 ## Running
 
-The application requires root privileges to access raw Bluetooth sockets:
-
 ```bash
+# Linux
 sudo node server.js
+
+# macOS
+node server.js
 ```
 
 Or using npm:
 ```bash
-sudo npm start
+sudo npm start  # Linux
+npm start        # macOS
 ```
 
 The web interface will be available at `http://localhost:3000`.
@@ -112,15 +123,22 @@ Edit `config.json` to customize behavior:
 | `device.addressType` | BLE address type (`public` or `random`) | `public` |
 | `server.port` | HTTP server port | `3000` |
 | `server.token` | Authentication token (set to `""` or `"none"` to disable) | Optional |
+| `nodes.enabled` | Enable forwarder node support | `true` |
+| `nodes.pingInterval` | Ping interval for node health checks (ms) | `30000` |
+| `nodes.staleTimeout` | Timeout before removing unresponsive nodes (ms) | `60000` |
+| `nodes.scanDuration` | Duration of handoff scans (ms) | `10000` |
+| `nodes.handoffTimeout` | Timeout before retrying handoff (ms) | `30000` |
+| `ble.hciInterface` | HCI device index (Linux only) | `0` |
 | `ble.reconnectDelay` | Delay before reconnecting (ms) | `5000` |
 | `ble.batteryCheckInterval` | Battery check interval (ms) | `1800000` |
 | `ble.scanDuration` | Device scan duration (ms) | `10000` |
-| `forwarder.url` | URL of a forwarder server for relay mode | `null` |
+| `ble.deviceNamePatterns` | Name substrings to match during scan | `["btt_xg_"]` |
+| `ble.scanOnStart` | Run a scan before connecting on startup | `true` |
 | `logging.level` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 
 ## Authentication
 
-Authentication can be enabled by setting a token in `config.json`. When enabled, all API endpoints and WebSocket connections require the token.
+Authentication can be enabled by setting a token in `config.json`. When enabled, all API endpoints, WebSocket connections, and forwarder node connections require the token.
 
 To disable authentication, set the token to an empty string `""` or `"none"`:
 ```json
@@ -189,7 +207,7 @@ Returns the current battery level (0-100).
 GET /api/scan?duration=<ms>
 ```
 
-Scan for compatible BLE devices. Results are only printed in logs.
+Scan for compatible BLE devices. Returns discovered devices as JSON.
 
 ### Progressive Shock
 ```
@@ -204,6 +222,13 @@ GET /api/pValue
 POST /api/pValue
 Body: { "value": <0-100> }
 ```
+
+### Node Pool Status
+```
+GET /api/nodes
+```
+
+Returns the current status of all connected forwarder nodes, active node ID, and local BLE connection state.
 
 ## WebSocket Events
 
@@ -249,65 +274,145 @@ The device uses the Nordic UART Service for communication:
 
 Battery level is returned in position 5 of the response: `[0xAA, 0x07, 0x00, 0x00, 0x1E, level, 0x00, 0x00, 0xBB]`
 
-## Forwarder / Relay Mode
+## Forwarder Nodes
 
-The forwarder feature allows the main server to relay commands through a secondary server when the BLE device is out of range. This is useful for extending range or running the main server on a device without Bluetooth.
+The forwarder system allows the server to relay commands through remote nodes when the BLE device is out of range of the server's local Bluetooth. Multiple nodes can be connected simultaneously, with automatic RSSI-based handoff when the active node loses its BLE connection.
 
-### Setup
+### Architecture
 
-1. Run `forwarder.js` on a device near the BLE device:
-   ```bash
-   sudo node forwarder.js
-   ```
+```
+Browser clients ─── Socket.io ───> [Central Server (+ local BLE fallback)]
+                                      │
+                         Raw WebSocket │ /ws/node
+                                      │
+            ┌─────────────────────────┼─────────────────────────┐
+            │                         │                         │
+    [Node.js Forwarder]     [Node.js Forwarder]      [ESP32 Forwarder]
+         │                         │                         │
+       Noble                     Noble                  BLE Client
+         │                         │                         │
+                    [Collar] (one connection at a time)
+```
 
-2. Configure the main server to use the forwarder by setting `forwarder.url` in `config.json`:
+- **The server always uses local BLE first.** If no local BLE connection is available, commands are routed to the active forwarder node.
+- **If no forwarder nodes are configured**, the server works standalone using local BLE only (the same behavior as before forwarder support was added).
+- **Only one node holds the BLE connection** at any time, since the collar accepts a single connection and becomes invisible once paired.
+
+### Handoff
+
+When the active node loses its BLE connection:
+
+1. The server sends a scan request to **all** connected forwarder nodes
+2. Each node scans for the collar for 10 seconds and reports discovered devices with RSSI
+3. The server picks the node with the **strongest RSSI** (closest to the device)
+4. That node is instructed to connect and becomes the new active node
+
+### Node.js Forwarder Setup
+
+1. Create a forwarder config file (see `config.forwarder.example.json`):
    ```json
    {
-     "forwarder": {
-       "url": "http://192.168.1.100:3000"
+     "node": {
+       "id": "forwarder-living-room",
+       "serverUrl": "ws://192.168.1.100:3000/ws/node",
+       "token": "YOUR_SECRET_TOKEN"
+     },
+     "device": {
+       "macAddress": "XX:XX:XX:XX:XX:XX",
+       "addressType": "public"
+     },
+     "ble": {
+       "deviceNamePatterns": ["btt_xg_"]
      }
    }
    ```
 
-3. The main server will automatically relay commands through the forwarder when:
-   - The local BLE connection is unavailable
-   - The forwarder is connected and reachable
+2. Run the forwarder on a device near the BLE collar:
+   ```bash
+   # Linux
+   sudo node forwarder.js /path/to/forwarder-config.json
 
-Commands, battery level requests, and RSSI queries are all forwarded transparently.
+   # macOS
+   node forwarder.js /path/to/forwarder-config.json
+   ```
 
-## ESPHome Integration
+3. The forwarder connects to the server via WebSocket, authenticates, and waits for instructions. The server's node pool manages which forwarder holds the active BLE connection.
 
-The `espcollar.yml` file provides an ESPHome configuration for ESP32 devices, enabling Home Assistant integration. Copy and customize the file with your WiFi credentials and device MAC address.
+### ESP32 Forwarder (ESPHome)
+
+The `espcollar.yml` file provides an ESPHome configuration for ESP32 boards that implements the same forwarder protocol over WebSocket.
+
+1. Copy `espcollar.yml` and `ws_forwarder.h` to your ESPHome config directory
+2. Edit `espcollar.yml`:
+   - Set your WiFi credentials
+   - Set the collar's MAC address in `ble_client`
+   - Set the server URL, auth token, and node ID in the `custom_component` section
+3. Flash to your ESP32
+
+The ESP32 forwarder uses the `links2004/WebSockets` library for WebSocket client support and communicates with the server using the same JSON protocol as the Node.js forwarder.
+
+### Node Protocol
+
+Forwarder nodes communicate with the server over raw WebSocket (not Socket.io) at the `/ws/node` endpoint using JSON text frames. The protocol includes:
+
+- **Authentication**: First message must be `{ "type": "auth", "token": "...", "nodeId": "..." }`
+- **Status updates**: Nodes send `{ "type": "status", "bleConnected": true, "battery": 85 }` every 10 seconds
+- **Commands**: Server sends `{ "type": "command", "id": 1, "data": "aa070a0000bb" }` (hex-encoded BLE data)
+- **Scan/handoff**: Server sends `{ "type": "scan", "duration": 10000 }`, node responds with `{ "type": "scan_result", "devices": [...] }`
+- **Health checks**: WebSocket-level ping/pong (30s interval, 60s stale timeout)
+
+## Platform Support
+
+### macOS
+
+macOS support is provided via `@stoprocent/noble`, which uses CoreBluetooth bindings. No root privileges are required. Note that CoreBluetooth does not expose device MAC addresses, so the server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`.
+
+### Linux
+
+Linux support uses HCI bindings via `@stoprocent/noble`. Root privileges are required for raw HCI socket access. Devices are connected directly by MAC address.
 
 ## Project Structure
 
 ```
-├── server.js           # Main application
-├── forwarder.js        # Relay/forwarder server
-├── config.json         # Configuration (create from example)
-├── config.example.json # Example configuration
+├── server.js                       # Central server (HTTP API, Socket.io, node pool, local BLE)
+├── forwarder.js                    # Headless forwarder node (WebSocket client + BLE bridge)
+├── ws_forwarder.h                  # ESP32 WebSocket forwarder component (C++ for ESPHome)
+├── config.json                     # Server configuration (create from example)
+├── config.example.json             # Example server configuration
+├── config.forwarder.example.json   # Example forwarder node configuration
+├── espcollar.yml                   # ESPHome configuration for ESP32 forwarder
 ├── lib/
-│   ├── logger.js       # Logging utility
-│   ├── constants.js    # BLE UUIDs and protocol constants
-│   └── scanner.js      # Device scanning functionality
+│   ├── ble-device.js               # BLE device connection manager (shared by server & forwarder)
+│   ├── node-pool.js                # Forwarder node pool with handoff logic
+│   ├── node-protocol.js            # WebSocket protocol constants and helpers
+│   ├── constants.js                # BLE UUIDs and protocol constants
+│   ├── logger.js                   # Logging utility
+│   └── scanner.js                  # Device scanning functionality
 ├── public/
-│   └── index.html      # Web interface
-└── espcollar.yml       # ESPHome configuration
+│   └── index.html                  # Web interface
+└── package.json
 ```
 
 ## Troubleshooting
 
-### Permission Denied
-The application requires root privileges. Run with `sudo`.
+### Permission Denied (Linux)
+The application requires root privileges on Linux. Run with `sudo`.
 
 ### Device Not Found
-1. Ensure Bluetooth is enabled: `sudo hciconfig hci0 up`
+1. Ensure Bluetooth is enabled: `sudo hciconfig hci0 up` (Linux)
 2. Check the MAC address in your config
 3. Make sure the device is powered on and in range
 4. Try running a scan: `curl http://localhost:3000/api/scan`
+5. On macOS, ensure `ble.deviceNamePatterns` includes a matching pattern
 
 ### Connection Drops
-The application will automatically attempt to reconnect. Check the logs for error messages. Adjust `ble.reconnectDelay` if needed.
+The application will automatically attempt to reconnect. Check the logs for error messages. Adjust `ble.reconnectDelay` if needed. If using forwarder nodes, the node pool will trigger a handoff scan on disconnect.
+
+### Forwarder Not Connecting
+1. Verify the server URL and port in the forwarder config
+2. Ensure the auth token matches the server's `server.token`
+3. Check that the `/ws/node` endpoint is reachable from the forwarder
+4. Check the server logs for auth failures
 
 ## License
 
