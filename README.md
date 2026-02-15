@@ -1,6 +1,8 @@
 # BLE Shock Collar Controller
 
-A Node.js application for controlling BLE shock collars based on the BK3633 SoC via the Nordic UART Service (NUS).
+A Node.js application for controlling the [BEITUTU BTT-XG](https://device.report/manual/4086894), a BLE shock collar based on the BK3633 SoC via the Nordic UART Service (NUS).
+
+The following app was used when researching the protocol: [App Store](https://apps.apple.com/us/app/宠物智能/id1587636746)
 
 > **Warning**: This project is intended solely for research and educational purposes. Do not wear the device or use it on any animal while it is powered on. No warranty is provided or implied. Use at your own risk.
 
