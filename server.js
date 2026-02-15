@@ -1,15 +1,16 @@
 const fs = require('fs');
 const path = require('path');
-const { withBindings } = require('@stoprocent/noble');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { io: ioClient } = require('socket.io-client');
+const { WebSocketServer } = require('ws');
 const bodyParser = require('body-parser');
 
 const { Logger } = require('./lib/logger');
-const { BLE_UUIDS_NOBLE, PROTOCOL, LIMITS } = require('./lib/constants');
-const { scanForDevices } = require('./lib/scanner');
+const { PROTOCOL, LIMITS } = require('./lib/constants');
+const { BleDevice } = require('./lib/ble-device');
+const { NodePool } = require('./lib/node-pool');
+const { MSG_AUTH, MSG_AUTH_RESULT, parseMessage, formatMessage } = require('./lib/node-protocol');
 
 
 /**
@@ -18,13 +19,10 @@ const { scanForDevices } = require('./lib/scanner');
  * @returns {string} Client IP address
  */
 function getClientIp(req) {
-  // Check X-Forwarded-For header (set by reverse proxies like Tailscale serve)
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) {
-    // X-Forwarded-For can contain multiple IPs, first one is the original client
     return forwarded.split(',')[0].trim();
   }
-  // Fallback to direct connection IP
   return req.ip || req.connection?.remoteAddress || 'unknown';
 }
 
@@ -63,6 +61,7 @@ const logger = new Logger({ level: config.logging?.level || 'info' });
 const bleLogger = logger.child('ble');
 const httpLogger = logger.child('http');
 const wsLogger = logger.child('websocket');
+const nodeLogger = logger.child('nodes');
 
 // Initialize Express and Socket.io
 const app = express();
@@ -70,65 +69,40 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: true });
 const port = process.env.PORT || config.server?.port || 3000;
 
-// BLE state
-let noble = null;
-let blePeripheral = null;
-let bleTxChar = null;
+// Node pool for forwarder connections
+const nodesEnabled = config.nodes?.enabled !== false;
+const nodePool = new NodePool(config.nodes || {}, logger);
+
+// Local BLE device (used as fallback when no forwarder nodes are available)
+const bleDevice = new BleDevice({
+  macAddress: config.device.macAddress,
+  addressType: config.device.addressType,
+  hciInterface: config.ble?.hciInterface,
+  reconnectDelay: config.ble?.reconnectDelay,
+  deviceNamePatterns: config.ble?.deviceNamePatterns,
+  scanDuration: config.ble?.scanDuration,
+  batteryCheckInterval: config.ble?.batteryCheckInterval,
+}, logger);
+
 let batteryLevel = 100;
-let isConnecting = false;
 
-// Forwarder client for relay mode
-let forwarderSocket = null;
-let forwarderConnected = false;
-const forwarderLogger = logger.child('forwarder');
+// Forward BLE device events
+bleDevice.on('battery', (level) => {
+  batteryLevel = level;
+});
 
-/**
- * Initialize the forwarder client connection if configured.
- */
-function initForwarder() {
-  const forwarderUrl = config.forwarder?.url;
-  if (!forwarderUrl) {
-    return;
+bleDevice.on('disconnected', () => {
+  // If nodes are enabled, trigger handoff to remote nodes
+  if (nodesEnabled && nodePool.hasNodes()) {
+    nodeLogger.info('Local BLE disconnected, triggering node pool handoff');
+    nodePool.triggerHandoff();
   }
+});
 
-  forwarderLogger.info(`Connecting to forwarder at ${forwarderUrl}`);
-  forwarderSocket = ioClient(forwarderUrl, {
-    reconnection: true,
-    reconnectionDelay: 5000,
-    reconnectionAttempts: Infinity,
-    auth: { token: AUTH_TOKEN },
-  });
-
-  forwarderSocket.on('connect', () => {
-    forwarderConnected = true;
-    forwarderLogger.info('Connected to forwarder');
-  });
-
-  forwarderSocket.on('disconnect', () => {
-    forwarderConnected = false;
-    forwarderLogger.warn('Disconnected from forwarder');
-  });
-
-  forwarderSocket.on('connect_error', (err) => {
-    forwarderLogger.error('Forwarder connection error', { error: err.message });
-  });
-
-  forwarderSocket.on('battery', (level) => {
-    batteryLevel = level;
-    forwarderLogger.debug(`Battery level from forwarder: ${level}%`);
-  });
-
-  forwarderSocket.on('rssi', (rssi) => {
-    forwarderLogger.debug(`RSSI from forwarder: ${rssi} dBm`);
-  });
-}
-
-/**
- * Check if we should use the forwarder for commands.
- */
-function shouldUseForwarder() {
-  return !bleTxChar && forwarderConnected && forwarderSocket;
-}
+// Forward node pool battery events
+nodePool.on('battery', (level) => {
+  batteryLevel = level;
+});
 
 // Key-value storage for persistent values
 const KV_STORAGE_PATH = path.join(__dirname, 'kvStorage.json');
@@ -189,34 +163,30 @@ function saveKvStorage() {
 }
 
 /**
- * Write data to the BLE device (async), or forward to relay if not connected.
+ * Write data to the BLE device or route via node pool.
+ * Tries local BLE first, then falls back to the node pool.
  */
 async function bleWriteAsync(data) {
-  if (bleTxChar) {
-    try {
-      await bleTxChar.writeAsync(data, true); // true = without response
-    } catch (err) {
-      bleLogger.error('Write failed', { error: err.message });
-    }
-    return true;
+  // Try local BLE first
+  if (bleDevice.isConnected()) {
+    return bleDevice.write(data);
   }
 
-  if (shouldUseForwarder()) {
-    forwarderLogger.info('Relaying command via forwarder');
-    forwarderSocket.emit('rawcommand', data.toString('hex'));
-    return true;
+  // Fall back to node pool
+  if (nodePool.getActiveNode()) {
+    return nodePool.sendCommand(data);
   }
 
-  bleLogger.warn('Cannot write: device not connected and no forwarder available');
+  bleLogger.warn('Cannot write: no local BLE and no active forwarder node');
   return false;
 }
 
 /**
- * Fire-and-forget write wrapper preserving sync call pattern.
+ * Fire-and-forget write wrapper.
  */
 function bleWrite(data) {
   bleWriteAsync(data);
-  return !!bleTxChar || shouldUseForwarder();
+  return bleDevice.isConnected() || !!nodePool.getActiveNode();
 }
 
 /**
@@ -262,194 +232,71 @@ function sendCommand(commands, originator = 'server') {
   return bleWrite(command);
 }
 
-/**
- * Request battery level from the device.
- */
-function getBatteryLevel() {
-  const command = Buffer.from([
-    PROTOCOL.BATTERY_START,
-    PROTOCOL.BATTERY_TYPE,
-    PROTOCOL.CMD_END,
-  ]);
-  bleWrite(command);
-}
+// WebSocket server for forwarder nodes (raw WebSocket, not Socket.io)
+const wss = new WebSocketServer({ noServer: true });
 
-/**
- * Initialize noble with platform-appropriate bindings.
- */
-function initNoble() {
-  if (process.platform === 'darwin') {
-    noble = withBindings('default');
-    bleLogger.info('Noble initialized with macOS native bindings');
-  } else {
-    const hciInterface = config.ble?.hciInterface || 0;
-    noble = withBindings('hci', {
-      hciDriver: 'native',
-      deviceId: hciInterface,
-    });
-    bleLogger.info(`Noble initialized with HCI bindings (device: hci${hciInterface})`);
-  }
-}
+wss.on('connection', (ws) => {
+  let authenticated = false;
+  let nodeId = null;
 
-/**
- * Find a peripheral by name pattern or UART service UUID (for macOS where MAC addresses are unavailable).
- */
-async function findPeripheral(namePatterns, timeout = 30000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      noble.stopScanningAsync().catch(() => {});
-      noble.removeListener('discover', onDiscover);
-      reject(new Error(`Device not found within ${timeout / 1000} seconds`));
-    }, timeout);
+  // Require auth within 5 seconds
+  const authTimeout = setTimeout(() => {
+    if (!authenticated) {
+      nodeLogger.warn('Node connection timed out waiting for auth');
+      ws.close();
+    }
+  }, 5000);
 
-    const onDiscover = (peripheral) => {
-      const name = peripheral.advertisement?.localName || '';
-      const serviceUuids = peripheral.advertisement?.serviceUuids || [];
-      const hasUartService = serviceUuids.includes(BLE_UUIDS_NOBLE.UART_SERVICE);
-      const matchesName = namePatterns.length > 0 &&
-        namePatterns.some(pattern => name.toLowerCase().includes(pattern.toLowerCase()));
+  ws.on('message', (raw) => {
+    const msg = parseMessage(raw.toString());
+    if (!msg) return;
 
-      if (hasUartService || matchesName) {
-        clearTimeout(timer);
-        noble.stopScanningAsync().catch(() => {});
-        noble.removeListener('discover', onDiscover);
-        resolve(peripheral);
+    // First message must be auth
+    if (!authenticated) {
+      if (msg.type !== MSG_AUTH) {
+        ws.send(formatMessage(MSG_AUTH_RESULT, { success: false }));
+        ws.close();
+        return;
       }
-    };
 
-    noble.on('discover', onDiscover);
-    noble.startScanningAsync([], false).catch((err) => {
-      clearTimeout(timer);
-      noble.removeListener('discover', onDiscover);
-      reject(err);
-    });
+      // Validate token
+      if (AUTH_ENABLED && msg.token !== AUTH_TOKEN) {
+        nodeLogger.warn('Node auth failed', { nodeId: msg.nodeId });
+        ws.send(formatMessage(MSG_AUTH_RESULT, { success: false }));
+        ws.close();
+        return;
+      }
+
+      authenticated = true;
+      nodeId = msg.nodeId || `node-${Date.now()}`;
+      clearTimeout(authTimeout);
+
+      ws.send(formatMessage(MSG_AUTH_RESULT, { success: true }));
+      nodeLogger.info(`Node ${nodeId} authenticated`);
+
+      // Add to pool (pool handles all subsequent messages)
+      nodePool.addNode(ws, nodeId);
+      return;
+    }
+    // After auth, messages are handled by NodePool via its own ws.on('message')
   });
-}
 
-/**
- * Connect to the BLE device and set up characteristic handlers.
- */
-async function connectToBleDevice(address, addressType) {
-  if (isConnecting) {
-    bleLogger.debug('Connection attempt already in progress, skipping');
-    return;
-  }
-  isConnecting = true;
+  ws.on('close', () => {
+    clearTimeout(authTimeout);
+  });
+});
 
-  bleLogger.info('Connecting to device', { address, addressType });
+// Handle HTTP upgrade requests - route /ws/node to raw WebSocket, let Socket.io handle the rest
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
 
-  try {
-    await noble.waitForPoweredOnAsync();
-
-    // macOS: scan to find device (CoreBluetooth doesn't expose MAC addresses)
-    // Linux: connect directly by MAC address
-    if (process.platform === 'darwin') {
-      const namePatterns = config.ble?.deviceNamePatterns || [];
-      bleLogger.info('macOS detected: scanning to find device...');
-      blePeripheral = await findPeripheral(namePatterns);
-      bleLogger.info(`Found device: ${blePeripheral.advertisement?.localName || blePeripheral.address}`);
-      await blePeripheral.connectAsync();
-    } else {
-      blePeripheral = await noble.connectAsync(address);
-    }
-
-    bleLogger.info(`Connected to ${blePeripheral.advertisement?.localName || blePeripheral.address}`);
-
-    // Discover UART service and characteristics
-    const { characteristics } = await blePeripheral.discoverSomeServicesAndCharacteristicsAsync(
-      [BLE_UUIDS_NOBLE.UART_SERVICE],
-      [BLE_UUIDS_NOBLE.TX_CHARACTERISTIC, BLE_UUIDS_NOBLE.RX_CHARACTERISTIC]
-    );
-
-    for (const char of characteristics) {
-      // RX characteristic - subscribe for notifications
-      if (char.uuid === BLE_UUIDS_NOBLE.RX_CHARACTERISTIC) {
-        await char.subscribeAsync();
-        // Remove previous data listeners to prevent accumulation (noble reuses objects)
-        char.removeAllListeners('data');
-        char.on('data', (data, isNotification) => {
-          if (!isNotification) return;
-          if (
-            data[0] === PROTOCOL.CMD_START &&
-            data[1] === PROTOCOL.CMD_TYPE &&
-            data[PROTOCOL.BATTERY_LEVEL_OFFSET] !== undefined
-          ) {
-            batteryLevel = data[PROTOCOL.BATTERY_LEVEL_OFFSET];
-            bleLogger.info(`Battery level: ${batteryLevel}%`);
-          }
-        });
-      }
-
-      // TX characteristic - save for sending commands
-      if (char.uuid === BLE_UUIDS_NOBLE.TX_CHARACTERISTIC) {
-        bleTxChar = char;
-        bleLogger.info('Device ready for commands');
-        getBatteryLevel();
-      }
-    }
-
-    if (!bleTxChar) {
-      bleLogger.error('TX characteristic not found on device');
-    }
-
-    isConnecting = false;
-
-    // Use once() to prevent handler accumulation (noble reuses Peripheral objects)
-    blePeripheral.once('disconnect', () => {
-      bleLogger.warn('Disconnected from device');
-      bleTxChar = null;
-      blePeripheral = null;
-
-      const reconnectDelay = config.ble?.reconnectDelay || 5000;
-      bleLogger.info(`Reconnecting in ${reconnectDelay / 1000} seconds...`);
-      setTimeout(() => {
-        connectToBleDevice(address, addressType).catch((err) => {
-          bleLogger.error('Reconnection failed', { error: err.message });
-        });
-      }, reconnectDelay);
+  if (url.pathname === '/ws/node') {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
     });
-
-  } catch (err) {
-    isConnecting = false;
-    bleLogger.error('Connection failed', { error: err.message });
-    const reconnectDelay = config.ble?.reconnectDelay || 5000;
-    bleLogger.info(`Retrying connection in ${reconnectDelay / 1000} seconds...`);
-    setTimeout(() => {
-      connectToBleDevice(address, addressType).catch(() => {});
-    }, reconnectDelay);
   }
-}
-
-/**
- * Start the application.
- */
-async function start() {
-  initNoble();
-
-  const { macAddress, addressType } = config.device;
-
-  // Conditionally scan before connecting
-  if (config.ble?.scanOnStart !== false) {
-    try {
-      const namePatterns = config.ble?.deviceNamePatterns || [];
-      const devices = await scanForDevices(noble, logger, config.ble?.scanDuration || 10000, namePatterns);
-      if (devices.length > 0) {
-        bleLogger.info('Compatible devices found during scan:', devices);
-      }
-    } catch (err) {
-      bleLogger.error('Scan failed', { error: err.message });
-    }
-  } else {
-    bleLogger.info('Scan on start disabled, connecting immediately');
-  }
-
-  // Connect to configured device
-  await connectToBleDevice(macAddress, addressType || 'public');
-
-  // Set up battery check interval
-  const batteryInterval = config.ble?.batteryCheckInterval || 30 * 60 * 1000;
-  setInterval(getBatteryLevel, batteryInterval);
-}
+  // Socket.io handles its own upgrade on the default path
+});
 
 // Socket.io authentication middleware (skipped if auth disabled)
 if (AUTH_ENABLED) {
@@ -463,7 +310,7 @@ if (AUTH_ENABLED) {
   });
 }
 
-// Socket.io event handlers
+// Socket.io event handlers (browser clients)
 io.on('connection', (socket) => {
   const clientIp = getSocketClientIp(socket);
   wsLogger.info(`Client connected`, { address: clientIp });
@@ -480,32 +327,41 @@ io.on('connection', (socket) => {
   });
 
   socket.on('getrssi', async () => {
-    if (blePeripheral) {
-      try {
-        const rssi = await blePeripheral.updateRssiAsync();
-        socket.emit('rssi', rssi);
-      } catch (err) {
-        bleLogger.error('Failed to read RSSI', { error: err.message });
-      }
-    } else if (shouldUseForwarder()) {
-      forwarderSocket.emit('getrssi');
-      forwarderSocket.once('rssi', (rssi) => socket.emit('rssi', rssi));
+    // Try local BLE first
+    if (bleDevice.isConnected()) {
+      const rssi = await bleDevice.getRssi();
+      if (rssi !== null) socket.emit('rssi', rssi);
+      return;
+    }
+
+    // Fall back to node pool
+    if (nodePool.getActiveNode()) {
+      const rssi = await nodePool.requestRssi();
+      if (rssi !== null) socket.emit('rssi', rssi);
     }
   });
 
-  socket.on('getbattery', () => {
-    if (bleTxChar) {
-      getBatteryLevel();
-      setTimeout(() => socket.emit('battery', batteryLevel), 1000);
-    } else if (shouldUseForwarder()) {
-      forwarderSocket.emit('getbattery');
-      forwarderSocket.once('battery', (level) => {
+  socket.on('getbattery', async () => {
+    // Try local BLE first
+    if (bleDevice.isConnected()) {
+      bleDevice.requestBattery();
+      setTimeout(() => socket.emit('battery', bleDevice.getBatteryLevel()), 1000);
+      return;
+    }
+
+    // Fall back to node pool
+    if (nodePool.getActiveNode()) {
+      const level = await nodePool.requestBattery();
+      if (level !== null) {
         batteryLevel = level;
         socket.emit('battery', level);
-      });
-    } else {
-      socket.emit('battery', batteryLevel);
+      } else {
+        socket.emit('battery', batteryLevel);
+      }
+      return;
     }
+
+    socket.emit('battery', batteryLevel);
   });
 
   socket.on('shutdown', () => {
@@ -528,8 +384,6 @@ app.use((req, res, next) => {
 
 /**
  * Validate authentication token from request.
- * Checks Authorization header (Bearer token) or query parameter.
- * Skips validation if authentication is disabled.
  */
 function validateToken(req, res, next) {
   if (!AUTH_ENABLED) {
@@ -594,15 +448,23 @@ app.get('/api/auth/status', (req, res) => {
   res.json({ enabled: AUTH_ENABLED });
 });
 
-app.get('/api/scan', validateToken, (req, res) => {
-  if (!noble) {
-    res.status(503).json({ error: 'BLE not initialized' });
-    return;
-  }
+app.get('/api/scan', validateToken, async (req, res) => {
   const duration = parseInt(req.query.duration, 10) || 10000;
-  const namePatterns = config.ble?.deviceNamePatterns || [];
-  scanForDevices(noble, logger, duration, namePatterns);
-  res.send('OK');
+  try {
+    const devices = await bleDevice.scan(duration);
+    res.json(devices);
+  } catch (err) {
+    res.status(503).json({ error: 'BLE scan failed', message: err.message });
+  }
+});
+
+// Node pool status endpoint
+app.get('/api/nodes', validateToken, (req, res) => {
+  res.json({
+    nodes: nodePool.getNodes(),
+    activeNodeId: nodePool.getActiveNode()?.nodeId || null,
+    localBleConnected: bleDevice.isConnected(),
+  });
 });
 
 // Serve static files
@@ -615,27 +477,45 @@ server.listen(port, host, () => {
   if (!AUTH_ENABLED) {
     httpLogger.warn('Authentication is DISABLED - server is publicly accessible');
   }
+  if (nodesEnabled) {
+    nodeLogger.info('Forwarder node support enabled on /ws/node');
+  }
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
   logger.info('Shutting down...');
   const cleanup = async () => {
-    if (blePeripheral) {
-      try { await blePeripheral.disconnectAsync(); } catch (e) { /* ignore */ }
-    }
-    if (noble) {
-      noble.stop();
-    }
+    nodePool.destroy();
+    await bleDevice.destroy();
     process.exit();
   };
   cleanup();
 });
 
-// Initialize forwarder connection if configured
-initForwarder();
+/**
+ * Start the application.
+ * Connects local BLE automatically. If forwarder nodes are enabled,
+ * they can take over when they connect and have better proximity.
+ */
+async function start() {
+  // Always try to connect local BLE (acts as fallback)
+  if (config.ble?.scanOnStart !== false) {
+    try {
+      const devices = await bleDevice.scan();
+      if (devices.length > 0) {
+        bleLogger.info('Compatible devices found during scan:', devices);
+      }
+    } catch (err) {
+      bleLogger.error('Scan failed', { error: err.message });
+    }
+  } else {
+    bleLogger.info('Scan on start disabled, connecting immediately');
+  }
 
-// Start the application
+  await bleDevice.connect();
+}
+
 start().catch((err) => {
   logger.error('Failed to start application', { error: err.message });
   process.exit(1);

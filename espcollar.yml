@@ -1,6 +1,11 @@
 esphome:
   name: ble-bridge
   friendly_name: ble-bridge
+  libraries:
+    - "links2004/WebSockets@^2.4.0"
+    - "bblanchon/ArduinoJson@^6.21.0"
+  includes:
+    - ws_forwarder.h
 
 esp32:
   board: esp32dev
@@ -11,7 +16,7 @@ esp32:
 logger:
   level: info
 
-# Enable Home Assistant API
+# Enable Home Assistant API (optional, for direct HA control alongside server)
 api:
   encryption:
     key: "yourkeyhere"
@@ -85,6 +90,7 @@ sensor:
     type: rssi
     ble_client_id: shock_collar
     name: "Collar RSSI"
+    id: collar_rssi
   - platform: ble_client
     id: shock_collar_battery
     type: characteristic
@@ -118,6 +124,17 @@ interval:
     then:
       - script.execute:
           id: get_battery_level
+
+# WebSocket forwarder custom component
+custom_component:
+  - lambda: |-
+      // Configuration - update these values
+      auto *forwarder = new WsForwarder(
+        "ws://192.168.1.100:3000/ws/node",  // Server WebSocket URL
+        "YOUR_SECRET_TOKEN",                   // Auth token
+        "esp32-ble-bridge"                     // Node ID
+      );
+      return {forwarder};
 
 script:
   - id: get_battery_level

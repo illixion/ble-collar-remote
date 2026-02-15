@@ -8,6 +8,13 @@
     "port": 3000,
     "token": "YOUR_SECRET_TOKEN_HERE_OR_EMPTY_TO_DISABLE"
   },
+  "nodes": {
+    "enabled": true,
+    "pingInterval": 30000,
+    "staleTimeout": 60000,
+    "scanDuration": 10000,
+    "handoffTimeout": 30000
+  },
   "ble": {
     "hciInterface": 0,
     "reconnectDelay": 5000,
@@ -15,9 +22,6 @@
     "scanDuration": 10000,
     "deviceNamePatterns": ["btt_xg_"],
     "scanOnStart": true
-  },
-  "forwarder": {
-    "url": null
   },
   "logging": {
     "level": "info"

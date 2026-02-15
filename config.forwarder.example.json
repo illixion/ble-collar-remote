@@ -1,0 +1,20 @@
+{
+  "node": {
+    "id": "forwarder-living-room",
+    "serverUrl": "ws://192.168.1.100:3000/ws/node",
+    "token": "YOUR_SECRET_TOKEN_HERE"
+  },
+  "device": {
+    "macAddress": "XX:XX:XX:XX:XX:XX",
+    "addressType": "public"
+  },
+  "ble": {
+    "hciInterface": 0,
+    "reconnectDelay": 5000,
+    "deviceNamePatterns": ["btt_xg_"],
+    "scanDuration": 10000
+  },
+  "logging": {
+    "level": "info"
+  }
+}
