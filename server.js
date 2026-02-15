@@ -104,6 +104,33 @@ nodePool.on('battery', (level) => {
   batteryLevel = level;
 });
 
+/**
+ * Build the node pool status payload for browser clients.
+ */
+function getNodesPayload() {
+  return {
+    enabled: nodesEnabled,
+    nodes: nodePool.getNodes(),
+    activeNodeId: nodePool.getActiveNode()?.nodeId || null,
+    localBleConnected: bleDevice.isConnected(),
+  };
+}
+
+/**
+ * Broadcast node pool state to all connected browser clients.
+ */
+function broadcastNodes() {
+  io.emit('nodes', getNodesPayload());
+}
+
+// Broadcast on node pool and local BLE state changes
+nodePool.on('node:connected', broadcastNodes);
+nodePool.on('node:disconnected', broadcastNodes);
+nodePool.on('active:changed', broadcastNodes);
+nodePool.on('no:active', broadcastNodes);
+bleDevice.on('connected', broadcastNodes);
+bleDevice.on('disconnected', broadcastNodes);
+
 // Key-value storage for persistent values
 const KV_STORAGE_PATH = path.join(__dirname, 'kvStorage.json');
 
@@ -339,6 +366,10 @@ io.on('connection', (socket) => {
       const rssi = await nodePool.requestRssi();
       if (rssi !== null) socket.emit('rssi', rssi);
     }
+  });
+
+  socket.on('getnodes', () => {
+    socket.emit('nodes', getNodesPayload());
   });
 
   socket.on('getbattery', async () => {

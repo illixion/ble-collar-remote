@@ -45,6 +45,7 @@
 
                 socket.emit('getrssi');
                 socket.emit('getbattery');
+                socket.emit('getnodes');
             });
 
             socket.on('connect_error', (err) => {
@@ -70,6 +71,58 @@
             socket.on('battery', (message) => {
                 document.getElementById("battery").innerHTML = message;
             });
+
+            socket.on('nodes', (data) => {
+                renderNodes(data);
+            });
+        }
+
+        function renderNodes(data) {
+            const section = document.getElementById('nodesSection');
+            const list = document.getElementById('nodesList');
+
+            if (!data.enabled) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = '';
+
+            let html = '';
+
+            // Local BLE entry
+            const localActive = data.localBleConnected && !data.activeNodeId;
+            html += '<div class="node-entry' + (localActive ? ' node-active' : '') + '">';
+            html += '<span class="node-id">Local BLE</span>';
+            html += '<span class="node-ble ' + (data.localBleConnected ? 'ble-on' : 'ble-off') + '">' +
+                    (data.localBleConnected ? 'Connected' : 'Disconnected') + '</span>';
+            if (localActive) html += '<span class="node-badge">Active</span>';
+            html += '</div>';
+
+            // Remote nodes
+            for (const node of data.nodes) {
+                html += '<div class="node-entry' + (node.isActive ? ' node-active' : '') + '">';
+                html += '<span class="node-id">' + escapeHtml(node.nodeId) + '</span>';
+                html += '<span class="node-ble ' + (node.bleConnected ? 'ble-on' : 'ble-off') + '">' +
+                        (node.bleConnected ? 'Connected' : 'Disconnected') + '</span>';
+                if (node.lastBattery !== null) {
+                    html += '<span class="node-battery">' + node.lastBattery + '%</span>';
+                }
+                if (node.isActive) html += '<span class="node-badge">Active</span>';
+                html += '</div>';
+            }
+
+            if (data.nodes.length === 0 && !data.localBleConnected) {
+                html += '<div class="node-entry"><span class="node-id" style="color:#666;">No forwarders connected</span></div>';
+            }
+
+            list.innerHTML = html;
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
         }
 
         window.onload = async () => {
@@ -242,6 +295,71 @@
         .token-section button {
             padding: 8px 16px;
         }
+
+        .nodes-section {
+            margin: 1rem auto;
+            padding: 1rem;
+            background-color: #111;
+            border-radius: 8px;
+            display: inline-block;
+            min-width: 300px;
+            text-align: left;
+        }
+
+        .nodes-section h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1em;
+            text-align: center;
+            color: #aaa;
+        }
+
+        .node-entry {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            background-color: #1a1a1a;
+        }
+
+        .node-entry.node-active {
+            background-color: #0a2a0a;
+            border: 1px solid #2a5a2a;
+        }
+
+        .node-id {
+            flex: 1;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .node-ble {
+            font-size: 0.8em;
+        }
+
+        .ble-on {
+            color: #6c6;
+        }
+
+        .ble-off {
+            color: #666;
+        }
+
+        .node-battery {
+            font-size: 0.8em;
+            color: #aaa;
+        }
+
+        .node-badge {
+            font-size: 0.7em;
+            background-color: #2a5a2a;
+            color: #6c6;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
     </style>
 </head>
 
@@ -269,6 +387,11 @@
     <p id="connectedIndicator">Disconnected</p>
     <p id="rssiIndicator">RSSI: <span id="rssi">0</span> dBm <button id="rssiRefresh">Refresh</button></p>
     <p id="batteryIndicator">Battery: <span id="battery">0</span> % <button id="batteryRefresh">Refresh</button></p>
+
+    <div class="nodes-section" id="nodesSection" style="display: none;">
+        <h3>Forwarder Nodes</h3>
+        <div id="nodesList"></div>
+    </div>
     <br>
 </body>
 
