@@ -2,7 +2,7 @@
  * BLE Collar Forwarder Node
  *
  * Headless bridge that connects to the central server via WebSocket and
- * relays commands to the BLE collar device. Managed by the server's node pool.
+ * relays commands to the BLE device. Managed by the server's node pool.
  *
  * Usage: node forwarder.js [config-path]
  */
@@ -12,6 +12,7 @@ const path = require('path');
 const WebSocket = require('ws');
 
 const { Logger } = require('./lib/logger');
+const { loadDeviceModule } = require('./lib/device-loader');
 const { BleDevice } = require('./lib/ble-device');
 const {
   MSG_AUTH,
@@ -45,9 +46,20 @@ if (!config.node?.serverUrl) {
   process.exit(1);
 }
 
+// Load and validate device module
+let deviceModule;
+try {
+  deviceModule = loadDeviceModule(config.device?.module);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
 // Initialize logger
 const logger = new Logger({ level: config.logging?.level || 'info' });
 const mainLogger = logger.child('forwarder');
+
+mainLogger.info(`Loaded device module: ${deviceModule.displayName}`);
 
 // Initialize BLE device
 const bleDevice = new BleDevice({
@@ -57,7 +69,7 @@ const bleDevice = new BleDevice({
   reconnectDelay: config.ble?.reconnectDelay,
   deviceNamePatterns: config.ble?.deviceNamePatterns,
   scanDuration: config.ble?.scanDuration,
-}, logger);
+}, logger, deviceModule);
 
 // WebSocket connection state
 let ws = null;

@@ -7,7 +7,7 @@ const { WebSocketServer } = require('ws');
 const bodyParser = require('body-parser');
 
 const { Logger } = require('./lib/logger');
-const { PROTOCOL, LIMITS } = require('./lib/constants');
+const { loadDeviceModule } = require('./lib/device-loader');
 const { BleDevice } = require('./lib/ble-device');
 const { NodePool } = require('./lib/node-pool');
 const { MSG_AUTH, MSG_AUTH_RESULT, parseMessage, formatMessage } = require('./lib/node-protocol');
@@ -51,6 +51,15 @@ if (!fs.existsSync(CONFIG_PATH)) {
 
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
+// Load and validate device module
+let deviceModule;
+try {
+  deviceModule = loadDeviceModule(config.device.module);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
 // Authentication config - empty string or "none" disables authentication
 const rawToken = config.server?.token;
 const AUTH_ENABLED = rawToken && rawToken !== 'none' && rawToken.trim() !== '';
@@ -62,6 +71,8 @@ const bleLogger = logger.child('ble');
 const httpLogger = logger.child('http');
 const wsLogger = logger.child('websocket');
 const nodeLogger = logger.child('nodes');
+
+logger.info(`Loaded device module: ${deviceModule.displayName} (${deviceModule.name})`);
 
 // Initialize Express and Socket.io
 const app = express();
@@ -82,7 +93,7 @@ const bleDevice = new BleDevice({
   deviceNamePatterns: config.ble?.deviceNamePatterns,
   scanDuration: config.ble?.scanDuration,
   batteryCheckInterval: config.ble?.batteryCheckInterval,
-}, logger);
+}, logger, deviceModule);
 
 let batteryLevel = 100;
 
@@ -176,7 +187,9 @@ function getValue(key) {
 
 function setValue(key, value) {
   if (key === 'pValue') {
-    kvStorage.pValue = Math.min(value, LIMITS.MAX_VALUE);
+    const progressiveCtrl = deviceModule.controls.find(c => c.id === deviceModule.progressiveControlId);
+    const maxValue = progressiveCtrl ? progressiveCtrl.max : 100;
+    kvStorage.pValue = Math.min(value, maxValue);
     kvStorage.pValueDate = new Date().toISOString();
   } else if (key === 'sValue') {
     kvStorage.sValue = value;
@@ -218,16 +231,17 @@ function bleWrite(data) {
 
 /**
  * Send a command to the device.
- * @param {Object} commands - { shock: 0-100, vibro: 0-100, sound: 0-100, find: boolean }
+ * Uses the device module to build command buffers from control values.
+ * @param {Object} commands - Control values (e.g., { shock: 50, vibro: 20, sound: 0 })
  * @param {string} originator - Source of the command for logging
  */
 function sendCommand(commands, originator = 'server') {
-  // Clamp values to valid range
-  for (const key in commands) {
-    if (typeof commands[key] !== 'boolean') {
-      commands[key] = Math.max(
-        LIMITS.MIN_VALUE,
-        Math.min(LIMITS.MAX_VALUE, Math.round(commands[key]))
+  // Clamp range values per control definitions
+  for (const ctrl of deviceModule.controls) {
+    if (ctrl.type === 'range' && commands[ctrl.id] !== undefined) {
+      commands[ctrl.id] = Math.max(
+        ctrl.min,
+        Math.min(ctrl.max, Math.round(commands[ctrl.id]))
       );
     }
   }
@@ -236,27 +250,20 @@ function sendCommand(commands, originator = 'server') {
     bleLogger.info(`Command from ${originator}`, commands);
   }
 
-  let command;
-  if (commands.find) {
-    command = Buffer.from([PROTOCOL.FIND_START, PROTOCOL.FIND_TYPE, PROTOCOL.CMD_END]);
-  } else {
-    const shock = commands.shock || 0;
-    const vibro = commands.vibro || 0;
-    const sound = commands.sound || 0;
-    command = Buffer.from([
-      PROTOCOL.CMD_START,
-      PROTOCOL.CMD_TYPE,
-      shock,
-      vibro,
-      sound,
-      PROTOCOL.CMD_END,
-    ]);
-
-    // Send command twice with delay for reliability
-    setTimeout(() => bleWrite(command), 300);
+  const result = deviceModule.buildCommand(commands);
+  if (!result || !result.buffer) {
+    bleLogger.warn('Device module returned no command buffer');
+    return false;
   }
 
-  return bleWrite(command);
+  const success = bleWrite(result.buffer);
+
+  // Handle repeat if the module requests it
+  if (result.repeat && result.repeatDelay) {
+    setTimeout(() => bleWrite(result.buffer), result.repeatDelay);
+  }
+
+  return success;
 }
 
 // WebSocket server for forwarder nodes (raw WebSocket, not Socket.io)
@@ -347,8 +354,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sendandincrease', () => {
+    const controlId = deviceModule.progressiveControlId;
+    if (!controlId) {
+      wsLogger.warn('Device module has no progressiveControlId, ignoring sendandincrease');
+      return;
+    }
     let pValue = getValue('pValue');
-    sendCommand({ shock: pValue }, clientIp);
+    sendCommand({ [controlId]: pValue }, clientIp);
     pValue += 10;
     setValue('pValue', pValue);
   });
@@ -447,8 +459,13 @@ app.get('/api/command', validateToken, (req, res) => {
 });
 
 app.get('/api/shockandincrease', validateToken, (req, res) => {
+  const controlId = deviceModule.progressiveControlId;
+  if (!controlId) {
+    res.status(400).json({ error: 'Device does not support progressive commands' });
+    return;
+  }
   let pValue = getValue('pValue') + 10;
-  sendCommand({ shock: pValue }, getClientIp(req));
+  sendCommand({ [controlId]: pValue }, getClientIp(req));
   setValue('pValue', pValue);
   res.send('OK');
 });
@@ -477,6 +494,15 @@ app.post('/api/sValue', validateToken, (req, res) => {
 
 app.get('/api/auth/status', (req, res) => {
   res.json({ enabled: AUTH_ENABLED });
+});
+
+app.get('/api/device/info', validateToken, (req, res) => {
+  res.json({
+    name: deviceModule.name,
+    displayName: deviceModule.displayName,
+    controls: deviceModule.controls,
+    hasBattery: typeof deviceModule.buildBatteryRequest === 'function',
+  });
 });
 
 app.get('/api/scan', validateToken, async (req, res) => {

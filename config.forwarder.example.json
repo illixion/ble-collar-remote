@@ -5,6 +5,7 @@
     "token": "YOUR_SECRET_TOKEN_HERE"
   },
   "device": {
+    "module": "btt-xg",
     "macAddress": "XX:XX:XX:XX:XX:XX",
     "addressType": "public"
   },

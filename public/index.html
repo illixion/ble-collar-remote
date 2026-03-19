@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collar controller</title>
+    <title>Device Controller</title>
 
     <script src="socket.io.min.js"></script>
     <script>
@@ -125,6 +125,42 @@
             return d.innerHTML;
         }
 
+        function renderControls(controls) {
+            const container = document.getElementById('controlsContainer');
+            container.innerHTML = '';
+
+            for (const ctrl of controls) {
+                if (ctrl.type === 'range') {
+                    const p = document.createElement('p');
+                    p.id = ctrl.id + 'Val';
+                    p.textContent = ctrl.label + ': ' + (ctrl.default !== undefined ? ctrl.default : ctrl.min);
+                    container.appendChild(p);
+
+                    const input = document.createElement('input');
+                    input.type = 'range';
+                    input.id = ctrl.id;
+                    input.min = ctrl.min;
+                    input.max = ctrl.max;
+                    input.value = ctrl.default !== undefined ? ctrl.default : ctrl.min;
+                    input.addEventListener('input', () => {
+                        p.textContent = ctrl.label + ': ' + input.value;
+                    });
+                    container.appendChild(input);
+                } else if (ctrl.type === 'action') {
+                    const btn = document.createElement('button');
+                    btn.id = ctrl.id;
+                    btn.textContent = ctrl.label;
+                    btn.className = 'action-btn';
+                    btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        if (!socket || !socket.connected) return;
+                        socket.emit('command', { [ctrl.id]: true });
+                    });
+                    container.appendChild(btn);
+                }
+            }
+        }
+
         window.onload = async () => {
             // Check if auth is enabled
             let authEnabled = true;
@@ -157,36 +193,40 @@
                 connect(!!token);
             });
 
-            // when a slider is moved, update the val element
-            document.getElementById('shock').addEventListener('input', (e) => {
-                document.getElementById('shockVal').innerHTML = "Shock: " + e.target.value;
-            });
-            document.getElementById('vibro').addEventListener('input', (e) => {
-                document.getElementById('vibroVal').innerHTML = "Vibro: " + e.target.value;
-            });
-            document.getElementById('sound').addEventListener('input', (e) => {
-                document.getElementById('soundVal').innerHTML = "Sound:" + e.target.value;
-            });
+            // Fetch device info and render controls dynamically
+            try {
+                const token = getToken();
+                const headers = {};
+                if (token) headers['Authorization'] = 'Bearer ' + token;
 
+                const res = await fetch('/api/device/info', { headers });
+                if (res.ok) {
+                    const deviceInfo = await res.json();
+                    document.title = deviceInfo.displayName + ' Controller';
+                    document.querySelector('h1').textContent = deviceInfo.displayName + ' Controller';
+                    renderControls(deviceInfo.controls);
+
+                    if (!deviceInfo.hasBattery) {
+                        document.getElementById('batteryIndicator').style.display = 'none';
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load device info:', e);
+            }
+
+            // Form submit - collect all range control values
             document.getElementById('msgform').addEventListener('submit', (e) => {
                 e.preventDefault();
                 if (!socket || !socket.connected) return;
-                const shock = parseInt(document.getElementById('shock').value) || 0;
-                const vibro = parseInt(document.getElementById('vibro').value) || 0;
-                const sound = parseInt(document.getElementById('sound').value) || 0;
-                socket.emit('command', {
-                    shock,
-                    vibro,
-                    sound
+
+                const data = {};
+                const inputs = document.querySelectorAll('#controlsContainer input[type="range"]');
+                inputs.forEach(input => {
+                    data[input.id] = parseInt(input.value) || 0;
                 });
+                socket.emit('command', data);
             });
-            document.getElementById('find').addEventListener('click', (e) => {
-                e.preventDefault();
-                if (!socket || !socket.connected) return;
-                socket.emit('command', {
-                    find: true
-                });
-            });
+
             document.getElementById('rssiRefresh').addEventListener('click', (e) => {
                 e.preventDefault();
                 if (!socket || !socket.connected) return;
@@ -233,9 +273,8 @@
             background-color: #ddd;
         }
 
-        #find {
+        .action-btn {
             margin-top: 1rem;
-            /* add padding on the sides */
             padding: 0.2rem 1rem;
         }
 
@@ -364,7 +403,7 @@
 </head>
 
 <body>
-    <h1>Collar controller</h1>
+    <h1>Device Controller</h1>
 
     <div class="token-section">
         <label for="token">Token: </label>
@@ -374,16 +413,12 @@
     </div>
 
     <form id="msgform">
-        <p id="shockVal">Shock: 0</p>
-        <input type="range" id="shock" min="0" max="100" value="0">
-        <p id="vibroVal">Vibro: 0</p>
-        <input type="range" id="vibro" min="0" max="100" value="0">
-        <p id="soundVal">Sound: 0</p>
-        <input type="range" id="sound" min="0" max="100" value="0">
-        <br><br>
+        <div id="controlsContainer">
+            <p style="color: #666;">Loading controls...</p>
+        </div>
+        <br>
         <input type="submit" value="Submit">
     </form>
-    <button id="find">Find</button>
     <p id="connectedIndicator">Disconnected</p>
     <p id="rssiIndicator">RSSI: <span id="rssi">0</span> dBm <button id="rssiRefresh">Refresh</button></p>
     <p id="batteryIndicator">Battery: <span id="battery">0</span> % <button id="batteryRefresh">Refresh</button></p>
