@@ -22,7 +22,7 @@ The following app was used when researching the protocol: [App Store](https://ap
 
 ## Desktop App (Electron)
 
-Pre-built binaries are available on the [Releases](../../releases) page for Windows (x64) and macOS (arm64).
+Pre-built binaries are available on the [Releases](../../releases) page for Windows (x64), macOS (arm64), and Linux (x64).
 
 The desktop app wraps the Node.js server in Electron, providing:
 
@@ -30,7 +30,7 @@ The desktop app wraps the Node.js server in Electron, providing:
 - A **BLE Scanner** page (View > BLE Scanner) to discover nearby devices and select one to use with a single click
 - An **Expose publicly** toggle to control whether the server is accessible from the network or only from localhost
 
-Config and data files are stored in the Electron user data directory (e.g., `%APPDATA%/ble-collar-remote` on Windows, `~/Library/Application Support/ble-collar-remote` on macOS).
+Config and data files are stored in the Electron user data directory (e.g., `%APPDATA%/ble-collar-remote` on Windows, `~/Library/Application Support/ble-collar-remote` on macOS, `~/.config/ble-collar-remote` on Linux).
 
 ### Building from source
 
