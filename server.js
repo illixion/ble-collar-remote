@@ -39,8 +39,8 @@ function getSocketClientIp(socket) {
   return socket.handshake.address || 'unknown';
 }
 
-// Load configuration
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+// Load configuration (support override via env var for Electron embedding)
+const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 const CONFIG_EXAMPLE_PATH = path.join(__dirname, 'config.example.json');
 
 if (!fs.existsSync(CONFIG_PATH)) {
@@ -142,8 +142,8 @@ nodePool.on('no:active', broadcastNodes);
 bleDevice.on('connected', broadcastNodes);
 bleDevice.on('disconnected', broadcastNodes);
 
-// Key-value storage for persistent values
-const KV_STORAGE_PATH = path.join(__dirname, 'kvStorage.json');
+// Key-value storage for persistent values (support override via env var for Electron embedding)
+const KV_STORAGE_PATH = process.env.KV_STORAGE_PATH || path.join(__dirname, 'kvStorage.json');
 
 function loadKvStorage() {
   if (!fs.existsSync(KV_STORAGE_PATH)) {
@@ -507,8 +507,9 @@ app.get('/api/device/info', validateToken, (req, res) => {
 
 app.get('/api/scan', validateToken, async (req, res) => {
   const duration = parseInt(req.query.duration, 10) || 10000;
+  const showAll = req.query.showAll === 'true';
   try {
-    const devices = await bleDevice.scan(duration);
+    const devices = await bleDevice.scan(duration, { showAll });
     res.json(devices);
   } catch (err) {
     res.status(503).json({ error: 'BLE scan failed', message: err.message });
@@ -524,8 +525,42 @@ app.get('/api/nodes', validateToken, (req, res) => {
   });
 });
 
+// Update device configuration from scan results
+app.post('/api/config/device', validateToken, (req, res) => {
+  const { macAddress, addressType, name } = req.body;
+  try {
+    const currentConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+
+    if (macAddress !== undefined) {
+      currentConfig.device.macAddress = macAddress;
+    }
+    if (addressType) {
+      currentConfig.device.addressType = addressType;
+    }
+    // Add device name to deviceNamePatterns if provided and not already present
+    if (name && name !== 'Unknown') {
+      if (!currentConfig.ble) currentConfig.ble = {};
+      if (!currentConfig.ble.deviceNamePatterns) currentConfig.ble.deviceNamePatterns = [];
+      const lowerName = name.toLowerCase();
+      const alreadyPresent = currentConfig.ble.deviceNamePatterns.some(
+        p => lowerName.includes(p.toLowerCase())
+      );
+      if (!alreadyPresent) {
+        currentConfig.ble.deviceNamePatterns.push(name);
+      }
+    }
+
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(currentConfig, null, 2));
+    httpLogger.info('Device configuration updated', { macAddress, addressType, name });
+    res.json({ success: true, message: 'Configuration updated. Restart the server to apply changes.' });
+  } catch (err) {
+    httpLogger.error('Failed to update config', { error: err.message });
+    res.status(500).json({ error: 'Failed to update configuration', message: err.message });
+  }
+});
+
 // Serve static files
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Start server
 const host = config.server?.host || '0.0.0.0';

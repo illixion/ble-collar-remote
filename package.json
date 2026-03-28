@@ -2,10 +2,16 @@
   "name": "ble-collar-remote",
   "version": "1.0.0",
   "description": "BLE training collar controller using Nordic UART Service",
-  "main": "server.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
-    "forwarder": "node forwarder.js"
+    "start:server": "node server.js",
+    "forwarder": "node forwarder.js",
+    "electron": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:dir": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
   },
   "author": "",
   "license": "MIT",
@@ -14,5 +20,60 @@
     "express": "^4.18.2",
     "socket.io": "^4.5.4",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.ble-collar-remote.app",
+    "productName": "BLE Collar Remote",
+    "files": [
+      "server.js",
+      "forwarder.js",
+      "lib/**/*",
+      "devices/**/*",
+      "public/**/*",
+      "electron/**/*",
+      "config.example.json",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "config.example.json",
+        "to": "config.example.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "identity": null
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ]
+    }
   }
 }

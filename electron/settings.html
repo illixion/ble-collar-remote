@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+            font-size: 14px;
+        }
+        h1 { font-size: 1.4em; margin-bottom: 20px; color: #fff; }
+        h2 {
+            font-size: 1em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin: 20px 0 10px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #333;
+        }
+        .field {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+        .field label {
+            min-width: 160px;
+            font-weight: 500;
+            color: #ccc;
+        }
+        .field input, .field select {
+            flex: 1;
+            padding: 6px 10px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+        .field input:focus, .field select:focus {
+            outline: none;
+            border-color: #6a9fd8;
+        }
+        .field input[type="checkbox"] {
+            flex: none;
+            width: 18px;
+            height: 18px;
+        }
+        .field .hint {
+            font-size: 0.8em;
+            color: #666;
+        }
+        .actions {
+            margin-top: 24px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        button {
+            padding: 8px 20px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #3a3a3a; }
+        button.primary {
+            background: #2a6ab5;
+            border-color: #2a6ab5;
+        }
+        button.primary:hover { background: #3578c4; }
+        .status {
+            margin-top: 10px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            display: none;
+            font-size: 0.9em;
+        }
+        .status.success { display: block; background: #1a3a1a; color: #6c6; border: 1px solid #2a5a2a; }
+        .status.error { display: block; background: #3a1a1a; color: #c66; border: 1px solid #5a2a2a; }
+    </style>
+</head>
+<body>
+    <h1>Settings</h1>
+
+    <h2>Server</h2>
+    <div class="field">
+        <label for="serverPort">Port</label>
+        <input type="number" id="serverPort" min="1" max="65535">
+    </div>
+    <div class="field">
+        <label for="exposePublicly">Expose publicly</label>
+        <input type="checkbox" id="exposePublicly">
+        <span class="hint">Listen on all interfaces (0.0.0.0) instead of localhost only</span>
+    </div>
+    <div class="field">
+        <label for="authToken">Auth token</label>
+        <input type="text" id="authToken" placeholder="Leave empty to disable auth">
+    </div>
+
+    <h2>Device</h2>
+    <div class="field">
+        <label for="deviceModule">Device type</label>
+        <select id="deviceModule"></select>
+    </div>
+    <div class="field">
+        <label for="macAddress">MAC address</label>
+        <input type="text" id="macAddress" placeholder="Optional on macOS/Windows">
+        <span class="hint">Use the BLE Scanner to auto-fill</span>
+    </div>
+    <div class="field">
+        <label for="addressType">Address type</label>
+        <select id="addressType">
+            <option value="public">public</option>
+            <option value="random">random</option>
+        </select>
+    </div>
+
+    <h2>BLE</h2>
+    <div class="field">
+        <label for="scanOnStart">Scan on start</label>
+        <input type="checkbox" id="scanOnStart">
+    </div>
+    <div class="field">
+        <label for="scanDuration">Scan duration (ms)</label>
+        <input type="number" id="scanDuration" min="1000" max="60000" step="1000">
+    </div>
+    <div class="field">
+        <label for="reconnectDelay">Reconnect delay (ms)</label>
+        <input type="number" id="reconnectDelay" min="1000" max="60000" step="1000">
+    </div>
+    <div class="field">
+        <label for="namePatterns">Name patterns</label>
+        <input type="text" id="namePatterns" placeholder="Comma-separated, e.g. btt_xg_">
+    </div>
+
+    <h2>Forwarder Nodes</h2>
+    <div class="field">
+        <label for="nodesEnabled">Enable nodes</label>
+        <input type="checkbox" id="nodesEnabled">
+    </div>
+
+    <h2>Logging</h2>
+    <div class="field">
+        <label for="logLevel">Log level</label>
+        <select id="logLevel">
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+        </select>
+    </div>
+
+    <div class="actions">
+        <button onclick="openConfigDir()">Open Config Folder</button>
+        <button class="primary" onclick="saveSettings()">Save &amp; Restart</button>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <script>
+        let currentConfig = {};
+
+        async function loadSettings() {
+            currentConfig = await settingsAPI.getConfig();
+            const devices = await settingsAPI.getDevices();
+
+            // Populate device module dropdown
+            const select = document.getElementById('deviceModule');
+            select.innerHTML = '';
+            for (const dev of devices) {
+                const opt = document.createElement('option');
+                opt.value = dev.value;
+                opt.textContent = dev.label;
+                select.appendChild(opt);
+            }
+
+            // Server
+            document.getElementById('serverPort').value = currentConfig.server?.port || 3000;
+            document.getElementById('exposePublicly').checked = (currentConfig.server?.host === '0.0.0.0');
+            document.getElementById('authToken').value = currentConfig.server?.token || '';
+
+            // Device
+            document.getElementById('deviceModule').value = currentConfig.device?.module || '';
+            document.getElementById('macAddress').value = currentConfig.device?.macAddress || '';
+            document.getElementById('addressType').value = currentConfig.device?.addressType || 'public';
+
+            // BLE
+            document.getElementById('scanOnStart').checked = currentConfig.ble?.scanOnStart !== false;
+            document.getElementById('scanDuration').value = currentConfig.ble?.scanDuration || 10000;
+            document.getElementById('reconnectDelay').value = currentConfig.ble?.reconnectDelay || 5000;
+            document.getElementById('namePatterns').value = (currentConfig.ble?.deviceNamePatterns || []).join(', ');
+
+            // Nodes
+            document.getElementById('nodesEnabled').checked = currentConfig.nodes?.enabled !== false;
+
+            // Logging
+            document.getElementById('logLevel').value = currentConfig.logging?.level || 'info';
+        }
+
+        async function saveSettings() {
+            const config = JSON.parse(JSON.stringify(currentConfig));
+
+            // Server
+            config.server = config.server || {};
+            config.server.port = parseInt(document.getElementById('serverPort').value, 10) || 3000;
+            config.server.host = document.getElementById('exposePublicly').checked ? '0.0.0.0' : '127.0.0.1';
+            config.server.token = document.getElementById('authToken').value.trim();
+
+            // Device
+            config.device = config.device || {};
+            config.device.module = document.getElementById('deviceModule').value;
+            config.device.macAddress = document.getElementById('macAddress').value.trim();
+            config.device.addressType = document.getElementById('addressType').value;
+
+            // BLE
+            config.ble = config.ble || {};
+            config.ble.scanOnStart = document.getElementById('scanOnStart').checked;
+            config.ble.scanDuration = parseInt(document.getElementById('scanDuration').value, 10) || 10000;
+            config.ble.reconnectDelay = parseInt(document.getElementById('reconnectDelay').value, 10) || 5000;
+            const patterns = document.getElementById('namePatterns').value.trim();
+            config.ble.deviceNamePatterns = patterns ? patterns.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+            // Nodes
+            config.nodes = config.nodes || {};
+            config.nodes.enabled = document.getElementById('nodesEnabled').checked;
+
+            // Logging
+            config.logging = config.logging || {};
+            config.logging.level = document.getElementById('logLevel').value;
+
+            try {
+                await settingsAPI.saveConfig(config);
+                await settingsAPI.restartServer();
+                showStatus('Settings saved. Server restarting...', 'success');
+            } catch (err) {
+                showStatus('Failed to save settings: ' + err.message, 'error');
+            }
+        }
+
+        function openConfigDir() {
+            settingsAPI.openConfigDir();
+        }
+
+        function showStatus(message, type) {
+            const el = document.getElementById('status');
+            el.textContent = message;
+            el.className = 'status ' + type;
+            setTimeout(() => { el.className = 'status'; }, 4000);
+        }
+
+        loadSettings();
+    </script>
+</body>
+</html>

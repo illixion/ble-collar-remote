@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLE Scanner</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: sans-serif;
+            text-align: center;
+            background-color: #000;
+            color: #fff;
+            padding: 20px;
+        }
+        h1 { font-size: 1.8em; margin-bottom: 0.5em; }
+        .controls {
+            margin: 1rem auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        label { font-size: 0.9em; color: #aaa; }
+        input[type="number"] {
+            width: 80px;
+            padding: 6px 10px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+        input[type="number"]:focus { outline: none; border-color: #6a9fd8; }
+        input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            vertical-align: middle;
+        }
+        button {
+            padding: 8px 20px;
+            font-size: 1em;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            color: #000;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover { background-color: #eee; }
+        button:active { background-color: #ddd; }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-use {
+            padding: 4px 12px;
+            font-size: 0.85em;
+            background: #2a6ab5;
+            color: #fff;
+            border: 1px solid #2a6ab5;
+        }
+        .btn-use:hover { background: #3578c4; }
+        .btn-use:disabled { background: #333; border-color: #444; color: #666; }
+        .status-msg {
+            margin: 1rem 0;
+            font-size: 0.9em;
+            color: #888;
+            min-height: 1.2em;
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #444;
+            border-top: 2px solid #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        table {
+            margin: 1rem auto;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        th {
+            padding: 8px 12px;
+            background: #111;
+            border-bottom: 2px solid #333;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+        }
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #222;
+            font-size: 0.9em;
+        }
+        tr:hover td { background: #111; }
+        tr.compatible td { border-left: 3px solid #2a6ab5; }
+        .rssi-good { color: #6c6; }
+        .rssi-fair { color: #cc6; }
+        .rssi-poor { color: #c66; }
+        .detection-badge {
+            font-size: 0.75em;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: #1a2a3a;
+            color: #6a9fd8;
+        }
+        .detection-badge.none {
+            background: #2a2a2a;
+            color: #666;
+        }
+        .empty-state {
+            margin: 2rem 0;
+            color: #555;
+        }
+        .token-section {
+            margin-bottom: 1rem;
+            padding: 0.8rem;
+            background-color: #111;
+            border-radius: 8px;
+            display: inline-block;
+        }
+        .token-section input[type="password"] {
+            width: 200px;
+            padding: 6px 10px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+        }
+        .token-section button { padding: 6px 12px; }
+        .nav { margin-bottom: 1rem; }
+        .nav a {
+            color: #6a9fd8;
+            text-decoration: none;
+        }
+        .nav a:hover { text-decoration: underline; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.visible { opacity: 1; }
+        .toast.success { background: #1a3a1a; color: #6c6; border: 1px solid #2a5a2a; }
+        .toast.error { background: #3a1a1a; color: #c66; border: 1px solid #5a2a2a; }
+    </style>
+</head>
+<body>
+    <div class="nav"><a href="/">&larr; Back to Controller</a></div>
+    <h1>BLE Scanner</h1>
+
+    <div class="token-section" id="tokenSection">
+        <label for="token">Token: </label>
+        <input type="password" id="token" placeholder="Enter auth token">
+        <button onclick="saveToken()">Save</button>
+    </div>
+
+    <div class="controls">
+        <label for="duration">Duration (seconds):</label>
+        <input type="number" id="duration" value="10" min="1" max="60">
+        <label for="showAll">
+            <input type="checkbox" id="showAll"> Show all devices
+        </label>
+        <button id="scanBtn" onclick="startScan()">Scan</button>
+    </div>
+
+    <div class="status-msg" id="status"></div>
+    <div id="results"></div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+        function getToken() {
+            return localStorage.getItem('authToken') || '';
+        }
+
+        function saveToken() {
+            const token = document.getElementById('token').value.trim();
+            localStorage.setItem('authToken', token);
+        }
+
+        async function checkAuth() {
+            try {
+                const res = await fetch('/api/auth/status');
+                const data = await res.json();
+                if (!data.enabled) {
+                    document.getElementById('tokenSection').style.display = 'none';
+                }
+            } catch (e) {}
+        }
+
+        function getHeaders() {
+            const token = getToken();
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            return headers;
+        }
+
+        function rssiClass(rssi) {
+            if (rssi >= -60) return 'rssi-good';
+            if (rssi >= -80) return 'rssi-fair';
+            return 'rssi-poor';
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function showToast(message, type) {
+            const el = document.getElementById('toast');
+            el.textContent = message;
+            el.className = 'toast visible ' + type;
+            setTimeout(() => { el.className = 'toast'; }, 4000);
+        }
+
+        async function useDevice(device) {
+            try {
+                const res = await fetch('/api/config/device', {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        macAddress: device.address,
+                        addressType: device.addressType,
+                        name: device.name,
+                    }),
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ error: 'Failed' }));
+                    showToast(err.error || 'Failed to update config', 'error');
+                    return;
+                }
+
+                const data = await res.json();
+                showToast(data.message || 'Device selected! Restart the server to apply.', 'success');
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+
+        async function startScan() {
+            const btn = document.getElementById('scanBtn');
+            const statusEl = document.getElementById('status');
+            const resultsEl = document.getElementById('results');
+            const showAll = document.getElementById('showAll').checked;
+
+            const duration = Math.max(1, Math.min(60, parseInt(document.getElementById('duration').value, 10) || 10));
+            const durationMs = duration * 1000;
+
+            btn.disabled = true;
+            statusEl.innerHTML = '<span class="spinner"></span>Scanning for ' + duration + ' seconds...';
+            resultsEl.innerHTML = '';
+
+            try {
+                let url = '/api/scan?duration=' + durationMs;
+                if (showAll) url += '&showAll=true';
+
+                const res = await fetch(url, { headers: getHeaders() });
+
+                if (res.status === 401) {
+                    statusEl.textContent = 'Unauthorized. Check your token.';
+                    btn.disabled = false;
+                    return;
+                }
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ error: 'Scan failed' }));
+                    statusEl.textContent = err.error || 'Scan failed';
+                    btn.disabled = false;
+                    return;
+                }
+
+                const devices = await res.json();
+                const compatible = devices.filter(d => d.isCompatible);
+                if (showAll) {
+                    statusEl.textContent = 'Found ' + devices.length + ' device(s)' +
+                        (compatible.length > 0 ? ' (' + compatible.length + ' compatible)' : '');
+                } else {
+                    statusEl.textContent = 'Found ' + devices.length + ' compatible device(s)';
+                }
+
+                if (devices.length === 0) {
+                    resultsEl.innerHTML = '<div class="empty-state">' +
+                        (showAll ? 'No BLE devices found nearby.' : 'No compatible devices found. Try enabling "Show all devices".') +
+                        '</div>';
+                } else {
+                    // Sort: compatible first, then by RSSI descending
+                    devices.sort((a, b) => {
+                        if (a.isCompatible !== b.isCompatible) return b.isCompatible ? 1 : -1;
+                        return b.rssi - a.rssi;
+                    });
+
+                    let html = '<table><thead><tr>';
+                    html += '<th>Name</th><th>Address</th><th>Type</th><th>RSSI</th><th>Detection</th><th></th>';
+                    html += '</tr></thead><tbody>';
+
+                    for (let i = 0; i < devices.length; i++) {
+                        const dev = devices[i];
+                        const rowClass = dev.isCompatible ? ' class="compatible"' : '';
+                        html += '<tr' + rowClass + '>';
+                        html += '<td>' + escapeHtml(dev.name) + '</td>';
+                        html += '<td><code>' + escapeHtml(dev.address) + '</code></td>';
+                        html += '<td>' + escapeHtml(dev.addressType) + '</td>';
+                        html += '<td class="' + rssiClass(dev.rssi) + '">' + dev.rssi + ' dBm</td>';
+                        html += '<td><span class="detection-badge' + (dev.detectionMethod === 'none' ? ' none' : '') + '">' +
+                                escapeHtml(dev.detectionMethod) + '</span></td>';
+                        html += '<td><button class="btn-use" onclick=\'useDevice(' + JSON.stringify(dev) + ')\'>Use</button></td>';
+                        html += '</tr>';
+                    }
+
+                    html += '</tbody></table>';
+                    resultsEl.innerHTML = html;
+                }
+            } catch (err) {
+                statusEl.textContent = 'Error: ' + err.message;
+            }
+
+            btn.disabled = false;
+        }
+
+        // Init
+        window.onload = () => {
+            checkAuth();
+            const savedToken = getToken();
+            if (savedToken) {
+                document.getElementById('token').value = savedToken;
+            }
+        };
+    </script>
+</body>
+</html>

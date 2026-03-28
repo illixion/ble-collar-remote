@@ -131,6 +131,11 @@ dist
 
 .esphome/
 
+# Electron build output
+dist/
+release/
+out/
+
 # Project-specific
 config.json
 kvStorage.json

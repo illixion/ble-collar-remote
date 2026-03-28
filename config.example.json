@@ -1,7 +1,7 @@
 {
   "device": {
     "module": "btt-xg",
-    "macAddress": "XX:XX:XX:XX:XX:XX",
+    "macAddress": "",
     "addressType": "public"
   },
   "server": {

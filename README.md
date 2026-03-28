@@ -1,6 +1,6 @@
 # BLE Shock Collar Controller
 
-A Node.js application for controlling the [BEITUTU BTT-XG](https://device.report/manual/4086894), a BLE shock collar based on the BK3633 SoC via the Nordic UART Service (NUS).
+A Node.js application for controlling the [BEITUTU BTT-XG](https://manuals.plus/beitutu/btt-xg-electronic-dog-training-collar-manual), a BLE shock collar based on the BK3633 SoC via the Nordic UART Service (NUS).
 
 The following app was used when researching the protocol: [App Store](https://apps.apple.com/us/app/宠物智能/id1587636746)
 
@@ -8,22 +8,44 @@ The following app was used when researching the protocol: [App Store](https://ap
 
 ## Features
 
+- **Desktop app** via Electron with built-in settings UI and BLE scanner
 - Web-based control interface with real-time status
 - REST API for integration with automation tools (e.g., iOS Shortcuts)
 - WebSocket support for real-time bidirectional communication
+- BLE scanner page for discovering and selecting devices
 - Automatic device scanning to find compatible devices
 - Battery level monitoring
 - Auto-reconnection on disconnect
 - Configurable logging levels
 - **Multi-node forwarder support** with automatic RSSI-based handoff
-- **ESP32 forwarder support** via ESPHome with WebSocket client
-- **macOS and Linux support** via `@stoprocent/noble`
+- **macOS, Linux, and Windows support** via `@stoprocent/noble`
+
+## Desktop App (Electron)
+
+Pre-built binaries are available on the [Releases](../../releases) page for Windows (x64) and macOS (arm64).
+
+The desktop app wraps the Node.js server in Electron, providing:
+
+- A **Settings** window (File > Settings or Ctrl+,) to configure the server, device, BLE, and forwarder node settings
+- A **BLE Scanner** page (View > BLE Scanner) to discover nearby devices and select one to use with a single click
+- An **Expose publicly** toggle to control whether the server is accessible from the network or only from localhost
+
+Config and data files are stored in the Electron user data directory (e.g., `%APPDATA%/ble-collar-remote` on Windows, `~/Library/Application Support/ble-collar-remote` on macOS).
+
+### Building from source
+
+```bash
+npm install
+npm run dist        # Build for current platform
+npm run dist:win    # Build for Windows
+```
 
 ## Requirements
 
 - Node.js 16+
 - **Linux**: Bluetooth adapter (BlueZ), root privileges for raw HCI socket access
 - **macOS**: Built-in Bluetooth or compatible adapter (no root required, uses CoreBluetooth via `@stoprocent/noble`)
+- **Windows**: Bluetooth adapter (uses WinRT bindings via `@stoprocent/noble`)
 
 ## Installation
 
@@ -43,7 +65,7 @@ The following app was used when researching the protocol: [App Store](https://ap
    cp config.example.json config.json
    ```
 
-4. Edit `config.json` and set your device's MAC address:
+4. Edit `config.json` with your device settings:
    ```json
    {
      "device": {
@@ -53,9 +75,9 @@ The following app was used when researching the protocol: [App Store](https://ap
    }
    ```
 
-   **Linux**: You may need to change your HCI interface number if you have multiple Bluetooth adapters. Run `btmgmt info` to see available interfaces, then update `ble.hciInterface` in `config.json` accordingly.
+   **macOS**: The MAC address is optional. CoreBluetooth does not expose MAC addresses, so the server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`. You can use the BLE Scanner page to find and select your device automatically.
 
-   **macOS**: CoreBluetooth does not expose MAC addresses. The server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`. If the scanner fails to find your device, use [LightBlue](https://apps.apple.com/us/app/lightblue/id557428110) on your phone to find the device name, then add it to `ble.deviceNamePatterns` in the config.
+   **Linux**: You may need to change your HCI interface number if you have multiple Bluetooth adapters. Run `btmgmt info` to see available interfaces, then update `ble.hciInterface` in `config.json` accordingly.
 
 5. Set your authentication token in `config.json`:
    ```json
@@ -73,26 +95,25 @@ The following app was used when researching the protocol: [App Store](https://ap
 
    # macOS (no root needed)
    node server.js
+
+   # Windows
+   node server.js
    ```
 
 7. (optional) Add an nginx reverse proxy for easier access and HTTPS. This is **required** if you want to expose the server to the internet, and using authentication is strongly encouraged. For non-technical users, I recommend using Tailscale since it issues certificates automatically, run `tailscale serve --bg http://127.0.0.1:3000` to allow access within your Tailnet only or `tailscale funnel --bg http://127.0.0.1:3000` to allow public access with HTTPS.
 
-## Finding Your Device's MAC Address
+## Finding Your Device
 
-Run the server without a configured MAC address, or use the scan API endpoint. The application will scan for nearby devices advertising the Nordic UART Service and log their addresses:
-
-```bash
-sudo node server.js
-```
-
-Look for log entries like:
-```
-2024-01-15T12:00:00.000Z INFO  [scanner] Found compatible device: Unknown {"address":"XX:XX:XX:XX:XX:XX","addressType":"public","rssi":"-45 dBm"}
-```
+The easiest way to find your device is to use the **BLE Scanner** page available at `http://localhost:3000/scan.html`. It allows you to scan for all nearby BLE devices and select the one you want to use, which will automatically update the configuration.
 
 You can also trigger a scan via the API:
 ```bash
 curl http://localhost:3000/api/scan
+```
+
+Or from the server logs on startup, look for entries like:
+```
+2024-01-15T12:00:00.000Z INFO  [scanner] Found compatible device: Unknown {"address":"XX:XX:XX:XX:XX:XX","addressType":"public","rssi":"-45 dBm"}
 ```
 
 ## Running
@@ -101,14 +122,14 @@ curl http://localhost:3000/api/scan
 # Linux
 sudo node server.js
 
-# macOS
+# macOS / Windows
 node server.js
 ```
 
 Or using npm:
 ```bash
 sudo npm start  # Linux
-npm start        # macOS
+npm start        # macOS / Windows
 ```
 
 The web interface will be available at `http://localhost:3000`.
@@ -119,8 +140,9 @@ Edit `config.json` to customize behavior:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `device.macAddress` | BLE MAC address of your device | Required |
+| `device.macAddress` | BLE MAC address of your device (optional on macOS) | `""` |
 | `device.addressType` | BLE address type (`public` or `random`) | `public` |
+| `server.host` | Bind address (`127.0.0.1` for local, `0.0.0.0` for public) | `0.0.0.0` |
 | `server.port` | HTTP server port | `3000` |
 | `server.token` | Authentication token (set to `""` or `"none"` to disable) | Optional |
 | `nodes.enabled` | Enable forwarder node support | `true` |
@@ -204,10 +226,10 @@ Returns the current battery level (0-100).
 
 ### Scan for Devices
 ```
-GET /api/scan?duration=<ms>
+GET /api/scan?duration=<ms>&showAll=true
 ```
 
-Scan for compatible BLE devices. Returns discovered devices as JSON.
+Scan for BLE devices. By default, only compatible devices (matching service UUID or name patterns) are returned. Set `showAll=true` to return all nearby BLE devices.
 
 ### Progressive Shock
 ```
@@ -222,6 +244,14 @@ GET /api/pValue
 POST /api/pValue
 Body: { "value": <0-100> }
 ```
+
+### Update Device Configuration
+```
+POST /api/config/device
+Body: { "macAddress": "XX:XX:XX:XX:XX:XX", "addressType": "public", "name": "device_name" }
+```
+
+Updates the device MAC address, address type, and optionally adds the device name to `ble.deviceNamePatterns`. Requires a server restart to take effect.
 
 ### Node Pool Status
 ```
@@ -287,7 +317,7 @@ Browser clients ─── Socket.io ───> [Central Server (+ local BLE fall
                                       │
             ┌─────────────────────────┼─────────────────────────┐
             │                         │                         │
-    [Node.js Forwarder]     [Node.js Forwarder]      [ESP32 Forwarder]
+    [Node.js Forwarder]     [Node.js Forwarder]       [Other Forwarder]
          │                         │                         │
        Noble                     Noble                  BLE Client
          │                         │                         │
@@ -338,19 +368,6 @@ When the active node loses its BLE connection:
 
 3. The forwarder connects to the server via WebSocket, authenticates, and waits for instructions. The server's node pool manages which forwarder holds the active BLE connection.
 
-### ESP32 Forwarder (ESPHome)
-
-The `espcollar.yml` file provides an ESPHome configuration for ESP32 boards that implements the same forwarder protocol over WebSocket.
-
-1. Copy `espcollar.yml` and the `components/` directory to your ESPHome config directory
-2. Edit `espcollar.yml`:
-   - Set your WiFi credentials
-   - Set the collar's MAC address in `ble_client`
-   - Set the server URL, auth token, and node ID in the `ws_forwarder` section
-3. Flash to your ESP32
-
-The forwarder is implemented as an ESPHome [external component](https://esphome.io/components/external_components) in `components/ws_forwarder/`. It uses the `links2004/WebSockets` library for WebSocket client support and ArduinoJson for message serialization, communicating with the server using the same JSON protocol as the Node.js forwarder.
-
 ### Node Protocol
 
 Forwarder nodes communicate with the server over raw WebSocket (not Socket.io) at the `/ws/node` endpoint using JSON text frames. The protocol includes:
@@ -365,11 +382,15 @@ Forwarder nodes communicate with the server over raw WebSocket (not Socket.io) a
 
 ### macOS
 
-macOS support is provided via `@stoprocent/noble`, which uses CoreBluetooth bindings. No root privileges are required. Note that CoreBluetooth does not expose device MAC addresses, so the server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`.
+macOS support is provided via `@stoprocent/noble`, which uses CoreBluetooth bindings. No root privileges are required. Note that CoreBluetooth does not expose device MAC addresses, so the server discovers devices by scanning for the Nordic UART Service UUID or by matching name patterns configured in `ble.deviceNamePatterns`. The MAC address field in the config can be left empty on macOS.
 
 ### Linux
 
 Linux support uses HCI bindings via `@stoprocent/noble`. Root privileges are required for raw HCI socket access. Devices are connected directly by MAC address.
+
+### Windows
+
+Windows support is provided via `@stoprocent/noble` using WinRT bindings. The Electron desktop app is the recommended way to use the application on Windows.
 
 ## Project Structure
 
@@ -379,20 +400,24 @@ Linux support uses HCI bindings via `@stoprocent/noble`. Root privileges are req
 ├── config.json                     # Server configuration (create from example)
 ├── config.example.json             # Example server configuration
 ├── config.forwarder.example.json   # Example forwarder node configuration
-├── espcollar.yml                   # ESPHome configuration for ESP32 forwarder
-├── components/
-│   └── ws_forwarder/               # ESPHome external component
-│       ├── __init__.py             # Component registration and code generation
-│       └── ws_forwarder.h          # WebSocket forwarder C++ implementation
+├── electron/
+│   ├── main.js                     # Electron main process
+│   ├── preload.js                  # Preload script for main window
+│   ├── preload-settings.js         # Preload script for settings window
+│   └── settings.html               # Electron settings UI
 ├── lib/
 │   ├── ble-device.js               # BLE device connection manager (shared by server & forwarder)
+│   ├── device-loader.js            # Device module loader and validator
 │   ├── node-pool.js                # Forwarder node pool with handoff logic
 │   ├── node-protocol.js            # WebSocket protocol constants and helpers
 │   ├── constants.js                # BLE UUIDs and protocol constants
 │   ├── logger.js                   # Logging utility
 │   └── scanner.js                  # Device scanning functionality
+├── devices/
+│   └── btt-xg.js                   # BEITUTU BTT-XG device module
 ├── public/
-│   └── index.html                  # Web interface
+│   ├── index.html                  # Web interface (controller)
+│   └── scan.html                   # BLE scanner page
 └── package.json
 ```
 
@@ -403,9 +428,9 @@ The application requires root privileges on Linux. Run with `sudo`.
 
 ### Device Not Found
 1. Ensure Bluetooth is enabled: `sudo hciconfig hci0 up` (Linux)
-2. Check the MAC address in your config
+2. Check the MAC address in your config (Linux) or name patterns (macOS)
 3. Make sure the device is powered on and in range
-4. Try running a scan: `curl http://localhost:3000/api/scan`
+4. Use the BLE Scanner page at `/scan.html` with "Show all devices" enabled
 5. On macOS, ensure `ble.deviceNamePatterns` includes a matching pattern
 
 ### Connection Drops
