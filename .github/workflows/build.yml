@@ -36,6 +36,11 @@ jobs:
         if: matrix.xcode
         run: sudo xcode-select -s "${{ matrix.xcode }}"
 
+      - name: Setup Python setuptools
+        run: pip3 install setuptools
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
