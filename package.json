@@ -46,12 +46,7 @@
       }
     ],
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        }
-      ],
+      "target": "nsis",
       "icon": null
     },
     "nsis": {
@@ -59,21 +54,11 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": ["arm64", "x64"]
-        }
-      ],
+      "target": "dmg",
       "identity": null
     },
     "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": ["x64"]
-        }
-      ]
+      "target": "AppImage"
     }
   }
 }
